@@ -12,7 +12,9 @@ sqrt5 = np.sqrt(5)
 def wind_mouse(start_x, start_y, dest_x, dest_y, G_0=9, W_0=3, M_0=20, D_0=12, move_mouse=lambda x,y: None):
     # https://ben.land/post/2021/04/25/windmouse-human-mouse-movement/
     '''
-    WindMouse algorithm. Calls the move_mouse kwarg with each new step.
+    Simulates a mouse moving from start_x, start_y to dest_x, dest_y using the WindMouse algorithm. Used to generate fake training data.
+
+    Calls the move_mouse kwarg with each new step.
     Released under the terms of the GPLv3 license.
     G_0 - magnitude of the gravitational fornce
     W_0 - magnitude of the wind force fluctuations
