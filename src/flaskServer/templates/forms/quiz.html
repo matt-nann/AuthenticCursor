@@ -1,0 +1,186 @@
+{% extends 'layouts/form.html' %}
+{% block content %}
+    <link type="text/css" rel="stylesheet" href="/static/css/quiz.css" />
+    <form method="post" novalidate>
+        {{ form.csrf_token }}
+        {% set question_counter = namespace(value=0) %} 
+        <!-- needs a mutable object to set the question counter so the set command is continually incremented -->
+        {% for question_form, selected_choice in form.questions|zip(selected_choices) %}
+            {% if question_form.label != 'question' %}
+            <div class="question">
+                <h4 class="questionTitle">{{ question_form.question.label }}</h4>
+                <div class="wrapper">
+                    {% for subfield in question_form.question %}
+                        <div class="form-check option record {{' selected' if selected_choice[0] == loop.index - 1 else ''}}" target_type="{{ TargetTypes.RADIO.value }}" 
+                                onclick="document.getElementById('radio_{{ question_counter.value }}_{{ loop.index }}').click()"
+                            >
+                            <!-- onclick makes the whole option clickable , iterating throught the pased selected_choices so upon a failed submit, previously selected answers are already highlighted -->
+                            {{ subfield(id='radio' ~ '_' ~ question_counter.value ~ '_' ~ loop.index, 
+                                class_ = 'form-check-input hidden-radio',
+                                onchange="removeSelectedClassFromChildren(this.parentNode.parentNode); this.parentNode.classList.add('selected')")}}
+                            {{ subfield.label(class_ = 'form-check-label') }}
+                        </div>
+                    {% endfor %}
+                </div>        
+            </div>            
+            {% set question_counter.value = question_counter.value + 1 %}
+            {% endif %}
+        {% endfor %}
+        <div class="submit">
+            <!-- <p id="mousePosition"></p>
+            <p id="output"></p> -->
+            {{ form.submit(class_ = 'btn btn-secondary btn-md record submitButton') }}
+        </div>
+    </form>
+    <script>
+        var p = document.getElementById('mousePosition');
+        var userHistory = [];
+
+        // making sure previously recorded options are reselected
+        const radioDivs = document.querySelectorAll('.form-check.option.record');
+        for (div of radioDivs){
+            if (div.classList.contains('selected')){
+                div.querySelector('input').checked = true;
+            }
+        }
+
+        function removeSelectedClassFromChildren(element) {
+            for (let i = 0; i < element.children.length; i++) {
+                element.children[i].classList.remove('selected');
+            }
+        }
+        document.addEventListener('mousemove', function(event) {
+            var x = event.clientX;
+            var y = event.clientY;
+            var timestamp = new Date().getTime();
+            // p.innerHTML = "Mouse position: X = " + x + ", Y = " + y + ". Timestamp: " + timestamp;
+            userHistory.push({
+                recordTimestamp: timestamp,
+                clientTimestamp: event.timeStamp,
+                button: 'NoButton',
+                state: 'Move',
+                x: x,
+                y: y
+            });
+        });
+
+        document.addEventListener('keydown', function(event) {
+            var x = event.which || event.keyCode;  // Get the Unicode value
+            var timestamp = new Date().getTime();
+            // document.getElementById("output").innerHTML = "Key code: " + x + ". Timestamp: " + timestamp;
+            userHistory.push({
+                recordTimestamp: timestamp,
+                clientTimestamp: event.timeStamp,
+                button: 'Key',
+                state: 'Pressed',
+                keyCode: x
+            });
+            console.log(userHistory);
+        });
+
+        document.body.addEventListener('mousedown', function(event) {
+            var timestamp = new Date().getTime();
+            var clickedElement = document.elementFromPoint(event.clientX, event.clientY);
+            const recordDiv = clickedElement.closest('.record');
+            if (recordDiv) {
+                clickedElement = recordDiv;
+            }
+            const boundingBox = clickedElement.getBoundingClientRect();
+                // x: The x-coordinate of the rectangle's left side, relative to the viewport origin (top left corner). Essentially, this is the distance from the left edge of the viewport to the left side of the rectangle.
+                // y: The y-coordinate of the rectangle's top side, relative to the viewport origin (top left corner). Essentially, this is the distance from the top edge of the viewport to the top side of the rectangle.
+                // width: The width of the rectangle, in pixels.
+                // height: The height of the rectangle, in pixels.
+                // top: The y-coordinate of the rectangle's top side, relative to the viewport origin (top left corner). This is equivalent to y.
+                // left: The x-coordinate of the rectangle's left side, relative to the viewport origin (top left corner). This is equivalent to x.
+                // right: The x-coordinate of the rectangle's right side, relative to the viewport origin (top left corner). This is equivalent to x + width.
+                // bottom: The y-coordinate of the rectangle's bottom side, relative to the viewport origin (top left corner). This is equivalent to y + height.
+            console.log('Bounding box: ', boundingBox);
+            if (!clickedElement.classList.contains('record')) {
+                console.log('No record class on clicked element');
+                return;
+            }
+            // extracting the question id and option id from only radio buttons
+            let inputElement = clickedElement.querySelector('input');
+            let question_id = null;
+            let option_id = null;
+            if (inputElement) {
+                let value = inputElement.value;
+                let valueParts = value.split('_');
+                question_id = Number(valueParts[1]);
+                option_id = Number(valueParts[2]);
+            }
+            // creating the target object (what the user is aiming for when they click)
+            const target = {
+                x: boundingBox.x,
+                y: boundingBox.y,
+                width: boundingBox.width,
+                height: boundingBox.height,
+                question_id: question_id,
+                option_id: option_id,
+                target_type: clickedElement.getAttribute('target_type'),
+            };
+            const clickEvent = {
+                recordTimestamp: timestamp,
+                clientTimestamp: event.timeStamp,
+                button: 'Left',
+                state: 'Pressed',
+                x: event.clientX,
+                y: event.clientY,
+                target : target,
+            };
+            userHistory.push(clickEvent);
+            fetch('/saveMouseDataSequence', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token() }}',
+                },
+                body: JSON.stringify(userHistory),
+            })
+            .then(response => response.json());
+            userHistory = [];
+        });
+
+        // don't record the release for now
+        // document.body.addEventListener('mouseup', function(event) {
+        //     var timestamp = new Date().getTime();
+
+        //     // Record the mouse release
+        //     userHistory.push({
+        //         recordTimestamp: timestamp,
+        //         clientTimestamp: event.timeStamp,
+        //         button: 'Left',
+        //         state: 'Released',
+        //         x: event.clientX,
+        //         y: event.clientY
+        //     });
+        // });
+    </script> 
+    <!-- <script>
+        // Get the element with id="mousePosition"
+        var p = document.getElementById('mousePosition');
+
+        // Add an event listener for the "mousemove" event
+        document.addEventListener('mousemove', function(event) {
+        // Get the current mouse position
+        var x = event.clientX;
+        var y = event.clientY;
+
+        // Get the current timestamp
+        var timestamp = new Date().getTime();
+
+        // Update the p element with the new mouse position and timestamp
+        p.innerHTML = "Mouse position: X = " + x + ", Y = " + y + ". Timestamp: " + timestamp;
+        });
+
+        // Add an event listener for the "keydown" event
+        document.addEventListener('keydown', function(event) {
+            var x = event.which || event.keyCode;  // Get the Unicode value
+            // Get the current timestamp
+            var timestamp = new Date().getTime();
+
+            // Update the p element with the key code and timestamp
+            document.getElementById("output").innerHTML = "Key code: " + x + ". Timestamp: " + timestamp;
+        });
+    </script>  -->
+{% endblock %}

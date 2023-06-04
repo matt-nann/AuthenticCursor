@@ -1,0 +1,12 @@
+{% extends 'layouts/form.html' %}
+{% block content %}
+    <link type="text/css" rel="stylesheet" href="/static/css/quiz.css" />
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
+        <h1 class="title" style="text-align: center;">Thank you for participating, Matt greatly appreciates you!</h1>
+        <div class="submit">
+            <a class="btn btn-secondary btn-md record submitButton" href="{{ url_for('quiz', quiz_id=1, page=1) }}" style="width:20em; margin-top: 2em;">
+                Begin First Survey
+            </a>
+        </div>
+    </div>
+{% endblock %}

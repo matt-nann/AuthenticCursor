@@ -1,0 +1,187 @@
+{
+    "title": "What Type of Plant Are You?",
+    "questions": [
+      {
+        "question": "What's your favorite kind of weather?",
+        "options": [
+          "Bright and sunny",
+          "Mild and cloudy",
+          "Cool and rainy",
+          "Cold and snowy"
+        ]
+      },
+      {
+        "question": "How social are you?",
+        "options": [
+          "I love being around people all the time",
+          "I enjoy socializing, but I need some alone time too",
+          "I prefer small, intimate gatherings",
+          "I'm a total introvert and cherish my alone time"
+        ]
+      },
+      {
+        "question": "What's your preferred drink?",
+        "options": [
+          "Freshly squeezed juice",
+          "Herbal tea",
+          "Coffee",
+          "Ice-cold water"
+        ]
+      },
+      {
+        "question": "How would you describe your personal style?",
+        "options": [
+          "Bright and colorful",
+          "Casual and comfortable",
+          "Elegant and sophisticated",
+          "Minimalistic and monochromatic"
+        ]
+      },
+      {
+        "question": "What's your favorite way to relax?",
+        "options": [
+          "Going for a walk outdoors",
+          "Reading a book",
+          "Watching a movie or TV show",
+          "Meditating or doing yoga"
+        ]
+      },
+      {
+        "question": "How do you handle stress?",
+        "options": [
+          "By staying active and busy",
+          "Talking to friends or family",
+          "Focusing on self-care",
+          "Retreating and taking time for myself"
+        ]
+      },
+      {
+        "question": "What's your favorite season?",
+        "options": [
+          "Summer",
+          "Spring",
+          "Autumn",
+          "Winter"
+        ]
+      },
+      {
+        "question": "What kind of environment do you thrive in?",
+        "options": [
+          "A bustling city",
+          "A cozy suburban town",
+          "A peaceful countryside",
+          "A secluded mountain retreat"
+        ]
+      },
+      {
+        "question": "What's your favorite type of vacation?",
+        "options": [
+          "A tropical beach getaway",
+          "A cultural city exploration",
+          "A nature-filled adventure",
+          "A cozy staycation"
+        ]
+      },
+      {
+        "question": "How do you feel about change?",
+        "options": [
+          "I embrace it and love trying new things",
+          "I'm open to it but prefer stability",
+          "I can handle it, but I don't seek it out",
+          "I prefer routine and predictability"
+        ]
+      }
+    ],
+    "results": [
+      "Sunflower",
+      "Peace Lily",
+      "Cactus",
+      "Snake Plant"
+    ],
+    "grading": {
+      "points": [
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "result_ranges": [
+        {
+          "min": 10,
+          "max": 19,
+          "result": 0
+        },
+        {
+          "min": 20,
+          "max": 29,
+          "result": 1
+        },
+        {
+          "min": 30,
+          "max": 39,
+          "result": 2
+        },
+        {
+          "min": 40,
+          "max": 50,
+          "result": 3
+        }
+      ]
+    }
+}

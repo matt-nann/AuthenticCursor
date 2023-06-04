@@ -1,0 +1,110 @@
+{   
+    "title": "personal finance",
+    "questions": [
+      {
+        "question": "How much do you spend on rent and utilities a month?",
+        "options": [
+          "$0-400",
+          "$401-600",
+          "$701-$1000",
+          "$1000+"
+        ]
+      },
+      {
+        "question": "How often do you go online shopping per month?",
+        "options": [
+          "0-1",
+          "2-3",
+          "4-6",
+          "7+"
+        ]
+      },
+      {
+        "question": "How much do you spend on groceries per month?",
+        "options": [
+          "$0-200",
+          "$201-400",
+          "$401-600",
+          "$601+"
+        ]
+      },
+      {
+        "question": "How often do you dine out or order takeout per week?",
+        "options": [
+          "0-1",
+          "2-3",
+          "4-6",
+          "7+"
+        ]
+      },
+      {
+        "question": "How much do you spend on clothing and accessories per month?",
+        "options": [
+          "$0-50",
+          "$51-100",
+          "$101-200",
+          "$201+"
+        ]
+      },
+      {
+        "question": "Your car is:",
+        "options": [
+          "owned by you",
+          "leased",
+          "I don\u2019t have a car"
+        ]
+      },
+      {
+        "question": "How often do you use paid streaming services (e.g., Netflix, Spotify) per month?",
+        "options": [
+          "0-5",
+          "6-10",
+          "11-20",
+          "21+"
+        ]
+      },
+      {
+        "question": "How much do you save per month?",
+        "options": [
+          "$0-50",
+          "$51-300",
+          "$301-600",
+          "$601+"
+        ]
+      },
+      {
+        "question": "Click all services that your parents still pay for:",
+        "options": [
+          "car insurance",
+          "healthcare",
+          "phone plan",
+          "rent"
+        ]
+      },
+      {
+        "question": "Do you own pets?",
+        "options": [
+          "True",
+          "False"
+        ]
+      },
+      {
+        "question": "Do you use budgeting tools?",
+        "options": [
+          "bank budgeting app",
+          "Excel",
+          "additional software",
+          "I don\u2019t have a budget"
+        ]
+      },
+      {
+        "question": "Click all the ways you save:",
+        "options": [
+          "401k",
+          "Roth IRA",
+          "mutual fund investing",
+          "stock investing"
+        ]
+      }
+    ]
+}

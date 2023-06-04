@@ -1,0 +1,187 @@
+{
+    "title": "Which Celebrity Chef Are You?",
+    "questions": [
+      {
+        "question": "What's your go-to cuisine when cooking at home?",
+        "options": [
+          "Italian",
+          "American",
+          "Asian",
+          "Mexican"
+        ]
+      },
+      {
+        "question": "How do you feel about spicy food?",
+        "options": [
+          "Bring on the heat!",
+          "I enjoy a little kick",
+          "I prefer mild flavors",
+          "No spice, please"
+        ]
+      },
+      {
+        "question": "What's your favorite kitchen gadget?",
+        "options": [
+          "A sharp chef's knife",
+          "A trusty cast-iron skillet",
+          "A versatile food processor",
+          "A handy immersion blender"
+        ]
+      },
+      {
+        "question": "How would you describe your cooking style?",
+        "options": [
+          "Classic and traditional",
+          "Comforting and hearty",
+          "Creative and adventurous",
+          "Fresh and healthy"
+        ]
+      },
+      {
+        "question": "Choose your ideal cooking show format:",
+        "options": [
+          "Educational and technique-focused",
+          "Fun and entertaining with a touch of humor",
+          "High-energy competitions",
+          "Calming and soothing with a focus on mindfulness"
+        ]
+      },
+      {
+        "question": "What's your favorite meal of the day?",
+        "options": [
+          "Breakfast",
+          "Lunch",
+          "Dinner",
+          "Dessert"
+        ]
+      },
+      {
+        "question": "Which of these cooking techniques are you most comfortable with?",
+        "options": [
+          "Baking and pastry",
+          "Grilling and barbecue",
+          "Stir-frying and saut\u00e9ing",
+          "Slow cooking and braising"
+        ]
+      },
+      {
+        "question": "How do you feel about following recipes?",
+        "options": [
+          "I stick to the recipe religiously",
+          "I use them as a guide and make my own tweaks",
+          "I rarely use recipes and prefer to improvise",
+          "I create my own recipes from scratch"
+        ]
+      },
+      {
+        "question": "What's your favorite thing to do with leftovers?",
+        "options": [
+          "Turn them into a delicious sandwich",
+          "Create a brand new dish",
+          "Use them in a soup or stew",
+          "Freeze them for future meals"
+        ]
+      },
+      {
+        "question": "What's your preferred dining atmosphere?",
+        "options": [
+          "A fine dining experience",
+          "A casual family-style gathering",
+          "A lively food festival or market",
+          "A serene picnic in nature"
+        ]
+      }
+    ],
+    "results": [
+      "Gordon Ramsay",
+      "Ina Garten",
+      "David Chang",
+      "Jamie Oliver"
+    ],
+    "grading": {
+      "points": [
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "result_ranges": [
+        {
+          "min": 10,
+          "max": 19,
+          "result": 0
+        },
+        {
+          "min": 20,
+          "max": 29,
+          "result": 1
+        },
+        {
+          "min": 30,
+          "max": 39,
+          "result": 2
+        },
+        {
+          "min": 40,
+          "max": 50,
+          "result": 3
+        }
+      ]
+    }
+}
