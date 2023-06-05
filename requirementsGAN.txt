@@ -19,6 +19,14 @@ typing-extensions==4.6.3
 plotly==5.14.1
 tenacity==8.2.2
 packaging==23.1
+nbformat
+# using plotly in jupyter notebooks
+attrs==23.1.0 
+fastjsonschema==2.17.1
+jsonschema==4.17.3
+nbformat==5.9.0
+pkgutil-resolve-name==1.3.10
+pyrsistent==0.19.3
 # plotting
 matplotlib==3.7.1
 contourpy==1.0.7

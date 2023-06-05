@@ -278,7 +278,7 @@ class MouseGAN_Data:
         df_abs['y'] = (df_abs['temp_y'] ).cumsum()
         return df_abs
 
-    def processMouseData(self, SHOW_ALL=False, SHOW_ONE=False, num_sequences=10):
+    def processMouseData(self, SHOW_ALL=False, SHOW_ONE=False, num_sequences=10, samples=None):
         self.fig = go.Figure()
         self.shapes, self.list_of_all_arrows = [], []
         self.SHOW_ALL = SHOW_ALL
@@ -294,7 +294,11 @@ class MouseGAN_Data:
         if self.USE_FAKE_DATA:
             # raw_x	raw_y velocity
             # width	height	start_x	start_y
-            for i in range(len(self.fake_trajectories)):
+            if samples is None:
+                sampleIndexes = range(len(self.fake_trajectories))
+            else:
+                sampleIndexes = np.random.choice(len(self.fake_trajectories), samples, replace=False)
+            for i in sampleIndexes:
                 trajectory = self.fake_trajectories[i]
                 buttonTarget = self.fake_buttonTargets[i]
                 f_trajectory = trajectory.copy()
@@ -322,6 +326,7 @@ class MouseGAN_Data:
                 counter += 1
                 if counter % int(len(self.fake_trajectories)*percentPrint) == 0:
                     print('processed fake data', counter, ' out of ', len(self.fake_trajectories))
+
         else:
             # filter out some they are roughly all the same length to start
             if self.equal_length:
