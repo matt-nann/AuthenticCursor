@@ -450,18 +450,14 @@ class MouseGAN_Data:
             buttonTargets.append(target)
         return input_trajectories, buttonTargets
     
-    def createFakeWindMouseDataset(self, save=False):
+    def createFakeWindMouseDataset(self, save=False,
+                                AXIAL_RESOLUTION = 2000, TOTAL_SAMPLES = 50000,
+                                low_radius = 100, high_radius = 1000,
+                                max_width = 200, min_width = 50,
+                                max_height = 100, min_height = 25,):
         # fig = go.Figure()
-        AXIAL_RESOLUTION = 2000
         theta = np.linspace(0, 2*np.pi, AXIAL_RESOLUTION)
-        low_radius = 100
-        high_radius = 1000
-        TOTAL_SAMPLES = 50000
         maxRadius = 0
-        max_width = 200
-        min_width = 50
-        max_height = 100
-        min_height = 25
 
         trajectories = []
         buttonTargets = []
