@@ -55,7 +55,7 @@ class Generator(GeneratorBase):
     def generate_noise(self, batch_size):
         # sampling from spherical distribution
         z = torch.randn([batch_size, self.MAX_SEQ_LEN, self.num_feats]).to(self.device)
-        z = z / z.norm(dim=-1, keepdim=True)
+        z = z / z.norm(dim=-1, keepdim=True).to(self.device)
         return z
 
     def forward(self, z, buttonTarget, states):
@@ -196,9 +196,9 @@ class WGAN_GP(GAN):
         if miniBatchDisc and (num_kernels is None or kernel_dim is None):
             raise ValueError("num_kernels and kernel_dim must be specified if using minibatch discrimination")
         self.device = device
-        generator = Generator(device, num_feats, latent_dim, target_dims, MAX_SEQ_LEN)
+        generator = Generator(device, num_feats, latent_dim, target_dims, MAX_SEQ_LEN).to(device)
         discriminator = Discriminator(device, num_feats, target_dims, 
-                            miniBatchDisc=miniBatchDisc, num_kernels=num_kernels, kernel_dim=kernel_dim)
+                            miniBatchDisc=miniBatchDisc, num_kernels=num_kernels, kernel_dim=kernel_dim).to(device)
         super().__init__(generator, discriminator)
         self.lambda_gp = lambda_gp
         self.device = device

@@ -168,5 +168,6 @@ cython_debug/
 cloud.env
 *.pth
 /venvDev
+/data/MNIST/*
 
 /src/mouseGAN/data/MNIST/raw/*
