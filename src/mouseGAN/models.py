@@ -2,9 +2,38 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd.variable import Variable
+from enum import Enum
+from dataclasses import dataclass
 
 from .abstractModels import GeneratorBase, DiscriminatorBase, GAN
 from .minibatchDiscrimination import MinibatchDiscrimination
+from .gapLR_Scheduler import GapScheduler
+
+class LR_SCHEDULERS(Enum):
+    LOSS_GAP_AWARE = 1 
+    """ params:
+        ideal_loss: the ideal loss of D. See Table 1 in https://arxiv.org/pdf/2302.00089.pdf
+        discLossDecay: decay factor used calculate the exponential moving average of discriminator loss
+        loss_min: the value of x at which the scheduler achieves its minimum allowed
+            value h_min. Specifically, when loss < ideal_loss, the scheduler
+            gradually decreases the LR (as long as x < loss_min). For x >= loss_min, the
+            scheduler's output is capped to the minimum allowed value h_min. In the
+            paper we set this to 0.1*ideal_loss.
+        loss_max: the value of x at which the scheduler achieves its maximum allowed
+            value f_max. Specifically, when loss >= ideal_loss, the scheduler
+            gradually increases the LR (as long as x < loss_max). For x >= loss_max, the
+            scheduler's output is capped to the maximum allowed value f_max. In the
+            paper we set this to 0.1*ideal_loss.
+        lr_shrinkMin: a scalar in (0, 1] denoting the minimum allowed value of the
+            scheduling function. In the paper we used lr_shrinkMin=0.1.
+        lr_growthMax: a scalar (>= 1) denoting the maximum allowed value of the 
+            scheduling function. In the paper we used lr_growthMax=2.0.
+    """
+    STEP = 2
+    """ params:
+        step_size
+        gamma
+    """
 
 def init_weights(m):
     if type(m) == nn.Linear:
@@ -30,8 +59,9 @@ def init_weights(m):
 class Generator(GeneratorBase):
     ''' C-RNN-GAN generator
     '''
-    def __init__(self, device, num_feats, latent_dim, target_dim, MAX_SEQ_LEN, hidden_units=256, drop_prob=0.6):
-        super(Generator, self).__init__(latent_dim=latent_dim)
+    def __init__(self, device, num_feats, latent_dim, target_dim, MAX_SEQ_LEN, 
+                 hidden_units=256, drop_prob=0.6, learning_rate=0.001):
+        super(Generator, self).__init__(latent_dim=latent_dim, lr=learning_rate)
         # params
         self.device = device
         self.MAX_SEQ_LEN = MAX_SEQ_LEN
@@ -115,9 +145,9 @@ class Discriminator(DiscriminatorBase):
     ''' C-RNN-GAN discrminator
     '''
     def __init__(self, device, num_feats, target_dim, 
-                hidden_units=256, drop_prob=0.6, 
+                hidden_units=256, drop_prob=0.6, learning_rate=0.001,
                 miniBatchDisc=True, num_kernels=None, kernel_dim=None):
-        super(Discriminator, self).__init__()
+        super(Discriminator, self).__init__(lr=learning_rate)
         # params
         self.miniBatchDisc = miniBatchDisc
         self.device = device
@@ -192,14 +222,28 @@ class WGAN_GP(GAN):
     """
     def __init__(self, device, num_feats, target_dims, MAX_SEQ_LEN,
                 miniBatchDisc=True, num_kernels=5, kernel_dim=3,
-                latent_dim = 100, lambda_gp = 10) -> GAN:
+                g_lr=0.0001, d_lr=0.0001,
+                latent_dim = 100, lambda_gp = 10, discriminator_steps=5, 
+                lr_scheduler=None, schedulerParams: dataclass=None
+                ) -> GAN:
         if miniBatchDisc and (num_kernels is None or kernel_dim is None):
             raise ValueError("num_kernels and kernel_dim must be specified if using minibatch discrimination")
         self.device = device
-        generator = Generator(device, num_feats, latent_dim, target_dims, MAX_SEQ_LEN).to(device)
-        discriminator = Discriminator(device, num_feats, target_dims, 
+        self.discriminator_steps = discriminator_steps
+        self.lr_scheduler = lr_scheduler
+        generator = Generator(device, num_feats, latent_dim, target_dims, MAX_SEQ_LEN, learning_rate=g_lr).to(device)
+        discriminator = Discriminator(device, num_feats, target_dims, learning_rate=d_lr,
                             miniBatchDisc=miniBatchDisc, num_kernels=num_kernels, kernel_dim=kernel_dim).to(device)
+
         super().__init__(generator, discriminator)
+
+        if lr_scheduler:
+            if lr_scheduler.value == LR_SCHEDULERS.STEP.value:
+                self.scheduler_G = torch.optim.lr_scheduler.StepLR(self.optimizer_G, **schedulerParams)
+                self.scheduler_D = torch.optim.lr_scheduler.StepLR(self.optimizer_D, **schedulerParams)
+            elif lr_scheduler.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
+                self.scheduler_D = GapScheduler(self.optimizer_D, **schedulerParams)
+
         self.lambda_gp = lambda_gp
         self.device = device
 
@@ -247,18 +291,18 @@ class WGAN_GP(GAN):
             fake_data, _ = self.generator(z, buttonTargets, g_states)
 
             ### train discriminator ###
+            # for ii in range(self.discriminator_steps):
             d_real_out, _, _ = self.discriminator(mouse_trajectories, buttonTargets, d_state)
             d_fake_out, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
             gradient_penalty = self.compute_gradient_penalty(mouse_trajectories, fake_data, buttonTargets, d_state, phi=1)
             # Compute the WGAN loss for the discriminator
             d_loss = torch.mean(d_fake_out) - torch.mean(d_real_out) + self.lambda_gp * gradient_penalty
-            d_loss.backward()
+            d_loss.backward() # retain_graph=True
             self.optimizer_D.step()
             self.optimizer_D.zero_grad()
 
             ### train generator ###
             # TODO do I need to generate the data a second time? the generator wouldn't have change when training the discriminator
-            fake_data, _ = self.generator(z, buttonTargets, g_states)
             d_logits_gen, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
             g_loss = - torch.mean(d_logits_gen)
             g_loss.backward()
@@ -270,5 +314,12 @@ class WGAN_GP(GAN):
             d_loss_total += d_loss.item()
 
             print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, len(dataloader), d_loss.item(),  g_loss.item()), end= "\r" if i != len(dataloader) - 1 else "\n")
+
+            if self.lr_scheduler and self.lr_scheduler.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
+                self.scheduler_D.step(d_loss)
+
+        if self.lr_scheduler and self.lr_scheduler.value != LR_SCHEDULERS.LOSS_GAP_AWARE.value:
+            self.scheduler_G.step()
+            self.scheduler_D.step()
 
         return d_loss_total / len(dataloader), g_loss_total / len(dataloader)
