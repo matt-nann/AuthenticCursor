@@ -70,7 +70,7 @@ class MouseGAN_Data:
     targetColumns = ['width','height','start_x','start_y']
     FIXED_TIMESTEP = 0.008
     def __init__(self, USE_FAKE_DATA=False, 
-                equal_length=True, lowerLimit = 50, upperLimit = 85):
+                equal_length=True, lowerLimit = 25, upperLimit = 50):
         self.equal_length = equal_length
         self.lowerLimit = lowerLimit
         self.upperLimit = upperLimit

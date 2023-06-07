@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .abstractModels import GeneratorBase, DiscriminatorBase, GAN
 from .minibatchDiscrimination import MinibatchDiscrimination
-from .gapLR_Scheduler import GapScheduler
+from .LR_schedulers import *
 
 class LR_SCHEDULERS(Enum):
     LOSS_GAP_AWARE = 1 
@@ -34,6 +34,10 @@ class LR_SCHEDULERS(Enum):
         step_size
         gamma
     """
+
+class LOSS_FUNC(Enum):
+    WGAN_GP = 1
+    LSGAN = 2
 
 def init_weights(m):
     if type(m) == nn.Linear:
@@ -193,6 +197,7 @@ class Discriminator(DiscriminatorBase):
         num_dims = len(out.shape)
         reduction_dims = tuple(range(1, num_dims))
         out = torch.mean(out, dim=reduction_dims)
+        # TODO only for LSGAN
 
         return out, lstm_out, state
 
@@ -214,7 +219,7 @@ class BasicGAN(GAN):
         super().__init__(generator, discriminator, conditional_freezing)
         self.seq_shape = generator.seq_shape
 
-class WGAN_GP(GAN):
+class MouseGAN(GAN):
     """
     TODO better description needed
     In Wasserstein GANs (WGAN), the critic aims to maximize the difference between its evaluations of real and generated samples, leading to a positive loss, 
@@ -224,7 +229,8 @@ class WGAN_GP(GAN):
                 miniBatchDisc=True, num_kernels=5, kernel_dim=3,
                 g_lr=0.0001, d_lr=0.0001,
                 latent_dim = 100, lambda_gp = 10, discriminator_steps=5, 
-                lr_scheduler=None, schedulerParams: dataclass=None
+                lr_scheduler=None, schedulerParams: dataclass=None, schedulerParamsG: dataclass=None,
+                lossFunc=LOSS_FUNC.LSGAN,
                 ) -> GAN:
         if miniBatchDisc and (num_kernels is None or kernel_dim is None):
             raise ValueError("num_kernels and kernel_dim must be specified if using minibatch discrimination")
@@ -234,6 +240,7 @@ class WGAN_GP(GAN):
         generator = Generator(device, num_feats, latent_dim, target_dims, MAX_SEQ_LEN, learning_rate=g_lr).to(device)
         discriminator = Discriminator(device, num_feats, target_dims, learning_rate=d_lr,
                             miniBatchDisc=miniBatchDisc, num_kernels=num_kernels, kernel_dim=kernel_dim).to(device)
+        self.lossFunc = lossFunc
 
         super().__init__(generator, discriminator)
 
@@ -243,11 +250,27 @@ class WGAN_GP(GAN):
                 self.scheduler_D = torch.optim.lr_scheduler.StepLR(self.optimizer_D, **schedulerParams)
             elif lr_scheduler.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
                 self.scheduler_D = GapScheduler(self.optimizer_D, **schedulerParams)
+                if schedulerParamsG:
+                    self.scheduler_G = ReduceLROnPlateauWithEMA(self.optimizer_G, 'min', **schedulerParamsG)
+            self.schedulerParams = schedulerParams
+            self.schedulerParamsG = schedulerParamsG
 
         self.lambda_gp = lambda_gp
         self.device = device
 
-    def compute_gradient_penalty(self, real_samples, fake_samples, buttonTarget, d_state, phi=1):
+        # LSGAN
+        self.criterion = nn.MSELoss()
+
+    def plotLearningRateScales(self):
+        if self.lr_scheduler:
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=list(range(len(self.scheduler_G.scale_history))), y=self.scheduler_G.scale_history, name="Generator"))
+            fig.add_trace(go.Scatter(x=list(range(len(self.scheduler_D.scale_history))), y=self.scheduler_D.scale_history, name="Discriminator"))
+            fig.update_layout(title="Learning rate scales", xaxis_title="Epoch", yaxis_title="Learning rate")
+            fig.show()
+
+    def compute_gradient_penalty(self, real_samples, fake_samples, buttonTargets, d_state, phi=1):
         """        
         helps ensure that the GAN learns smoothly and generates realistic samples by measuring and penalizing abrupt changes in the discriminator's predictions.
 
@@ -260,7 +283,7 @@ class WGAN_GP(GAN):
         interpolated = alpha * real_samples + (1 - alpha) * fake_samples
         # calculate probability of interpolated examples
         with torch.backends.cudnn.flags(enabled=False):
-            prob_interpolated, _, _ = self.discriminator(interpolated, buttonTarget, d_state)
+            prob_interpolated, _, _ = self.discriminator(interpolated, buttonTargets, d_state)
         ones = torch.ones(prob_interpolated.size()).to(self.device).requires_grad_(True)
         gradients = torch.autograd.grad(
             outputs=prob_interpolated,
@@ -272,6 +295,36 @@ class WGAN_GP(GAN):
             torch.mean((gradients.view(gradients.size(0), -1).norm(2, dim=1) - 1) ** 2)
         )   
         return gradient_penalty
+    
+    def discriminatorLoss(self, d_real_out, d_fake_out, mouse_trajectories, fake_data, buttonTargets, d_state):
+        if self.lossFunc.value == LOSS_FUNC.WGAN_GP.value:
+            gradient_penalty = self.compute_gradient_penalty(mouse_trajectories, fake_data, buttonTargets, d_state, phi=1)
+            # Compute the WGAN loss for the discriminator
+            d_loss = torch.mean(d_fake_out) - torch.mean(d_real_out) + self.lambda_gp * gradient_penalty
+            # the discriminator tries to minimize the loss by giving out lower scores to fake samples and high scores to real samples, 
+            # the discriminator is pentalized for abrupt changes in it's predictions
+        elif self.lossFunc.value == LOSS_FUNC.LSGAN.value:
+            d_real_out = d_real_out.view(-1)
+            d_fake_out = d_fake_out.view(-1)
+            loss_disc_real = self.criterion(d_real_out, torch.ones_like(d_real_out))
+            loss_disc_fake = self.criterion(d_fake_out, torch.zeros_like(d_fake_out))
+            d_loss = (loss_disc_real + loss_disc_fake) / 2
+        else:
+            raise ValueError("Invalid loss function")
+        return d_loss
+    
+    def generatorLoss(self, z, buttonTargets, g_states, d_state):
+        if self.lossFunc.value == LOSS_FUNC.WGAN_GP.value:
+            # The generator's optimizer (self.optimizer_G) tries to minimize this loss, which is equivalent to maximizing the average discriminator's score for the generated data. As this loss is minimized, the generator gets better at producing data that looks real to the discriminator.ine)
+            g_loss = - torch.mean(d_logits_gen)
+        elif self.lossFunc.value == LOSS_FUNC.LSGAN.value:
+            fake_data, _ = self.generator(z, buttonTargets, g_states) # need to redo generator pass because the previous gradient graph is discarded once the discriminator is zeroed
+            d_logits_gen, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
+            d_logits_gen = d_logits_gen.view(-1)
+            g_loss = self.criterion(d_logits_gen, torch.ones_like(d_logits_gen))
+        else:
+            raise ValueError("Invalid loss function")
+        return g_loss
 
     def train_epoch(self, dataloader):
         g_loss_total, d_loss_total = 0.0, 0.0
@@ -284,42 +337,42 @@ class WGAN_GP(GAN):
 
             real_batch_size = mouse_trajectories.shape[0]
 
-            g_states = self.generator.init_hidden(real_batch_size)
+            g_state = self.generator.init_hidden(real_batch_size)
             d_state = self.discriminator.init_hidden(real_batch_size)
 
             z = self.generator.generate_noise(real_batch_size)
-            fake_data, _ = self.generator(z, buttonTargets, g_states)
+            fake_data, _ = self.generator(z, buttonTargets, g_state)
 
             ### train discriminator ###
             # for ii in range(self.discriminator_steps):
             d_real_out, _, _ = self.discriminator(mouse_trajectories, buttonTargets, d_state)
             d_fake_out, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
-            gradient_penalty = self.compute_gradient_penalty(mouse_trajectories, fake_data, buttonTargets, d_state, phi=1)
-            # Compute the WGAN loss for the discriminator
-            d_loss = torch.mean(d_fake_out) - torch.mean(d_real_out) + self.lambda_gp * gradient_penalty
-            d_loss.backward() # retain_graph=True
-            self.optimizer_D.step()
-            self.optimizer_D.zero_grad()
 
-            ### train generator ###
-            # TODO do I need to generate the data a second time? the generator wouldn't have change when training the discriminator
-            d_logits_gen, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
-            g_loss = - torch.mean(d_logits_gen)
-            g_loss.backward()
+            d_loss = self.discriminatorLoss(d_real_out, d_fake_out, mouse_trajectories, fake_data, buttonTargets, d_state)
+            self.optimizer_D.zero_grad() # clear previous gradients
+            d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
+            self.optimizer_D.step() # perform updates using calculated gradients
 
-            self.optimizer_G.step()
+            g_loss = self.generatorLoss(z, buttonTargets, g_state, d_state)
             self.optimizer_G.zero_grad()
+            g_loss.backward()
+            self.optimizer_G.step()
 
             g_loss_total += g_loss.item()
             d_loss_total += d_loss.item()
 
-            print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, len(dataloader), d_loss.item(),  g_loss.item()), end= "\r" if i != len(dataloader) - 1 else "\n")
+            print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, len(dataloader), d_loss.item(),  g_loss.item()), end="\n")
+            # print(f"\t\tfake score: %.3f real score: %.3f gradient_penalty: %.3f lambda_gp: %.3f" % (torch.mean(d_fake_out).item(), torch.mean(d_real_out).item(), gradient_penalty, self.lambda_gp))
+            # print(f"\t\tfake score: %.3f real score: %.3f" % (torch.mean(d_fake_out).item(), torch.mean(d_real_out).item()))
 
             if self.lr_scheduler and self.lr_scheduler.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
                 self.scheduler_D.step(d_loss)
+                if self.schedulerParamsG:
+                    self.scheduler_G.step(g_loss.item())
+                print(f"\t\tschedulers step D_lr: {self.optimizer_D.param_groups[0]['lr']}, G_lr: {self.optimizer_G.param_groups[0]['lr']}")
 
         if self.lr_scheduler and self.lr_scheduler.value != LR_SCHEDULERS.LOSS_GAP_AWARE.value:
-            self.scheduler_G.step()
             self.scheduler_D.step()
+            self.scheduler_G.step()
 
         return d_loss_total / len(dataloader), g_loss_total / len(dataloader)

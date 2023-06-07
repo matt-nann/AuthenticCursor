@@ -116,7 +116,10 @@ class GAN(metaclass=abc.ABCMeta):
             self.discriminator.load_state_dict(torch.load(latest_d_model))
             print(f"Loaded discriminator model: {latest_d_model}")
         if latest_g_model is not None and latest_d_model is not None:
-            startingEpoch = min(int(latest_g_model.split('/')[-1].split('.')[0][1:]), int(latest_d_model.split('/')[-1].split('.')[0][1:]))
+            if isinstance(startingEpoch, str):
+                startingEpoch = 0
+            else:
+                startingEpoch = min(int(latest_g_model.split('/')[-1].split('.')[0][1:]), int(latest_d_model.split('/')[-1].split('.')[0][1:]))
             print(f"Starting from epoch {startingEpoch}")
         else:
             print("No pretrained models found. Starting from scratch.")
