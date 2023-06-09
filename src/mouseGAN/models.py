@@ -5,6 +5,7 @@ from torch.autograd.variable import Variable
 from enum import Enum
 from dataclasses import dataclass
 
+from .dataProcessing import MouseGAN_Data
 from .abstractModels import GeneratorBase, DiscriminatorBase, GAN
 from .minibatchDiscrimination import MinibatchDiscrimination
 from .LR_schedulers import *
@@ -150,7 +151,9 @@ class Discriminator(DiscriminatorBase):
     '''
     def __init__(self, device, num_feats, target_dim, 
                 hidden_units=256, drop_prob=0.6, learning_rate=0.001,
-                miniBatchDisc=True, num_kernels=None, kernel_dim=None):
+                miniBatchDisc=True, num_kernels=None, kernel_dim=None,
+                use_D_endDeviationLoss=False
+                ):
         super(Discriminator, self).__init__(lr=learning_rate)
         # params
         self.miniBatchDisc = miniBatchDisc
@@ -166,7 +169,7 @@ class Discriminator(DiscriminatorBase):
         self.lstm = nn.LSTM(input_size=lstm_input_dim, hidden_size=hidden_units,
                             num_layers=self.num_layers, batch_first=True, dropout=drop_prob,
                             bidirectional=True)
-        self.fc_layer = nn.Linear(in_features=(2*hidden_units), out_features=1)
+        self.fc_layer = nn.Linear(in_features=(2*hidden_units), out_features=2 if use_D_endDeviationLoss else 1)
         # Spectral Normalization operates by normalizing the weights of the neural network layer using the spectral norm, 
         # which is the maximum singular value of the weights matrix. This normalization technique ensures Lipschitz continuity 
         # and controls the Lipschitz constant of the function represented by the neural network, which is important for the stability of GANs. 
@@ -188,6 +191,9 @@ class Discriminator(DiscriminatorBase):
             x = input_feats
         lstm_out, state = self.lstm(x, state)
         out = self.fc_layer(lstm_out)
+
+        # print("out.shape: ", out.shape, "lstm_out.shape: ", lstm_out.shape)
+        # raise
         """
         The current discriminator architecture utilizes LSTM for sequential data, applying a fully connected layer and sigmoid activation function at each time step, resulting in a sequence of scores. 
         The mean of these scores is taken to represent the whole sequence's score. This is because, in many sequence-to-sequence problems, 
@@ -225,21 +231,38 @@ class MouseGAN(GAN):
     In Wasserstein GANs (WGAN), the critic aims to maximize the difference between its evaluations of real and generated samples, leading to a positive loss, 
     while the generator minimizes the critic's evaluations of its generated samples, leading to a negative loss.
     """
-    def __init__(self, device, num_feats, target_dims, MAX_SEQ_LEN,
+    def __init__(self, dataset: MouseGAN_Data, device, num_feats, target_dims, MAX_SEQ_LEN,
                 miniBatchDisc=True, num_kernels=5, kernel_dim=3,
                 g_lr=0.0001, d_lr=0.0001,
                 latent_dim = 100, lambda_gp = 10, discriminator_steps=5, 
                 lr_scheduler=None, schedulerParams: dataclass=None, schedulerParamsG: dataclass=None,
-                lossFunc=LOSS_FUNC.LSGAN,
+                lossFunc=LOSS_FUNC.LSGAN, 
+                use_D_endDeviationLoss=False, use_G_OutsideTargetLoss=False, locationMSELoss = False,
                 ) -> GAN:
         if miniBatchDisc and (num_kernels is None or kernel_dim is None):
             raise ValueError("num_kernels and kernel_dim must be specified if using minibatch discrimination")
         self.device = device
         self.discriminator_steps = discriminator_steps
         self.lr_scheduler = lr_scheduler
+
+        if not isinstance(dataset, MouseGAN_Data):
+            raise ValueError("dataset must be an instance of MouseGAN_Data")
+        self.dataset = dataset
+        self.std_traj = torch.Tensor(dataset.std_traj).to(device)
+        self.std_button = torch.Tensor(dataset.std_button).to(device)
+        self.mean_traj = torch.Tensor(dataset.mean_traj).to(device)
+        self.mean_button = torch.Tensor(dataset.mean_button).to(device)
+        if (use_D_endDeviationLoss or use_G_OutsideTargetLoss):
+            self.locationMSELoss = locationMSELoss
+            self.criterion_locaDev = nn.MSELoss() if locationMSELoss else nn.L1Loss()
+        self.use_D_locationDeviationLoss = use_D_endDeviationLoss
+        self.use_G_OutsideTargetLoss = use_G_OutsideTargetLoss
+
         generator = Generator(device, num_feats, latent_dim, target_dims, MAX_SEQ_LEN, learning_rate=g_lr).to(device)
         discriminator = Discriminator(device, num_feats, target_dims, learning_rate=d_lr,
-                            miniBatchDisc=miniBatchDisc, num_kernels=num_kernels, kernel_dim=kernel_dim).to(device)
+                            miniBatchDisc=miniBatchDisc, num_kernels=num_kernels, kernel_dim=kernel_dim,
+                            use_D_endDeviationLoss=use_D_endDeviationLoss, 
+                            ).to(device)
         self.lossFunc = lossFunc
 
         super().__init__(generator, discriminator)
@@ -270,6 +293,53 @@ class MouseGAN(GAN):
             fig.update_layout(title="Learning rate scales", xaxis_title="Epoch", yaxis_title="Learning rate")
             fig.show()
 
+    def calcFinalTrajLocations(self, g_feats, buttonTargets):
+        # calculate the final locations of the trajectories
+        rawTrajectories = g_feats * self.std_traj + self.mean_traj
+        rawButtonTargets = buttonTargets * self.std_button + self.mean_button
+        targetWidths = rawButtonTargets[:, 0] 
+        targetHeights = rawButtonTargets[:, 1]
+        startingLocations = rawButtonTargets[:, 2:4]
+        realFinalLocations = rawButtonTargets[:, 4:6]
+        g_finalLocations = startingLocations + rawTrajectories.sum(dim=1)
+        return g_finalLocations, realFinalLocations, targetWidths, targetHeights
+
+    def endDeviationLoss(self, g_finalLocations, realFinalLocations):
+        """
+        the discriminator is penalized for incorrectly classifying the final location of both fake and real mouse trajectories
+        E.I. the generator creates a sequence of mouse movements, the discriminator has to analyze the series of delta movements and predict the final location
+        NOT comparing the final generated location to the real final location or vice versa
+        """
+        d_loss = self.criterion_locaDev(g_finalLocations, realFinalLocations)
+        return d_loss
+
+    def outsideTargetLoss(self, g_finalLocations, targetWidths, targetHeights):
+        """
+        the generator is penalized for generating trajectories that are outside the target area
+        """
+        # Coordinates of the button's edges
+        x1, y1 = -targetWidths / 2, -targetHeights / 2
+        # Calculate distances from the point to each edge of the button
+        dx1 = x1 - g_finalLocations[:, 0]
+        dx2 = g_finalLocations[:, 0] - (x1 + targetWidths)
+        dy1 = y1 - g_finalLocations[:, 1]
+        dy2 = g_finalLocations[:, 1] - (y1 + targetHeights)
+        # If a distance is negative, the point is inside the button with respect to that edge
+        insideBounds = (dx1 <= 0) & (dx2 <= 0) & (dy1 <= 0) & (dy2 <= 0)
+        # Get the maximum distance for x and y (0 if the point is inside the button)
+        dx = torch.max(dx1, dx2)
+        dy = torch.max(dy1, dy2)
+        # Calculate the distances to the nearest corner or edge
+        dx_dy_gt_0 = (dx > 0) & (dy > 0)  # both dx and dy are > 0, point is outside the button
+        dists = torch.where(dx_dy_gt_0, torch.sqrt(dx**2 + dy**2), torch.max(dx, dy))  # calculate distance to the corner or edge
+        # Apply the mask, so that distance is 0 for points inside the button
+        masked_dists = torch.where(insideBounds, torch.zeros_like(dists), dists)
+        if self.locationMSELoss:
+            g_losses = masked_dists
+        else:
+            g_losses = masked_dists ** 0.5
+        return g_losses.mean()
+
     def compute_gradient_penalty(self, real_samples, fake_samples, buttonTargets, d_state, phi=1):
         """        
         helps ensure that the GAN learns smoothly and generates realistic samples by measuring and penalizing abrupt changes in the discriminator's predictions.
@@ -296,9 +366,9 @@ class MouseGAN(GAN):
         )   
         return gradient_penalty
     
-    def discriminatorLoss(self, d_real_out, d_fake_out, mouse_trajectories, fake_data, buttonTargets, d_state):
+    def discriminatorLoss(self, d_real_out, d_fake_out, mouse_trajectories, fake_traj, buttonTargets, d_state):
         if self.lossFunc.value == LOSS_FUNC.WGAN_GP.value:
-            gradient_penalty = self.compute_gradient_penalty(mouse_trajectories, fake_data, buttonTargets, d_state, phi=1)
+            gradient_penalty = self.compute_gradient_penalty(mouse_trajectories, fake_traj, buttonTargets, d_state, phi=1)
             # Compute the WGAN loss for the discriminator
             d_loss = torch.mean(d_fake_out) - torch.mean(d_real_out) + self.lambda_gp * gradient_penalty
             # the discriminator tries to minimize the loss by giving out lower scores to fake samples and high scores to real samples, 
@@ -311,6 +381,10 @@ class MouseGAN(GAN):
             d_loss = (loss_disc_real + loss_disc_fake) / 2
         else:
             raise ValueError("Invalid loss function")
+        # additional loss components
+        if self.use_D_locationDeviationLoss:
+            g_finalLocations, realFinalLocations, _, _ = self.calcFinalTrajLocations(fake_traj, buttonTargets)
+            d_loss += self.endDeviationLoss(g_finalLocations, realFinalLocations)
         return d_loss
     
     def generatorLoss(self, z, buttonTargets, g_states, d_state):
@@ -318,37 +392,39 @@ class MouseGAN(GAN):
             # The generator's optimizer (self.optimizer_G) tries to minimize this loss, which is equivalent to maximizing the average discriminator's score for the generated data. As this loss is minimized, the generator gets better at producing data that looks real to the discriminator.ine)
             g_loss = - torch.mean(d_logits_gen)
         elif self.lossFunc.value == LOSS_FUNC.LSGAN.value:
-            fake_data, _ = self.generator(z, buttonTargets, g_states) # need to redo generator pass because the previous gradient graph is discarded once the discriminator is zeroed
-            d_logits_gen, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
+            fake_traj, _ = self.generator(z, buttonTargets, g_states) # need to redo generator pass because the previous gradient graph is discarded once the discriminator is zeroed
+            d_logits_gen, _, _ = self.discriminator(fake_traj, buttonTargets, d_state)
             d_logits_gen = d_logits_gen.view(-1)
             g_loss = self.criterion(d_logits_gen, torch.ones_like(d_logits_gen))
         else:
             raise ValueError("Invalid loss function")
+        # additional loss components
+        if self.use_G_OutsideTargetLoss:
+            g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, buttonTargets)
+            g_loss += self.outsideTargetLoss(g_finalLocations, targetWidths, targetHeights)
         return g_loss
 
     def train_epoch(self, dataloader):
         g_loss_total, d_loss_total = 0.0, 0.0
         for i, dataTuple in enumerate(dataloader, 0): 
-            mouse_trajectories, buttonTargets, trajectoryLengths = dataTuple
-            # if len(mouse_trajectories) != BATCH_SIZE:
-            #     continue
+            mouse_trajectories, buttonAndLocations, trajectoryLengths = dataTuple
             mouse_trajectories = mouse_trajectories.to(self.device)
-            buttonTargets = buttonTargets.to(self.device).squeeze(1)
-
+            buttonAndLocations = buttonAndLocations.to(self.device)
+            buttonTargets = buttonAndLocations[:, :, :4].squeeze(1)
             real_batch_size = mouse_trajectories.shape[0]
 
             g_state = self.generator.init_hidden(real_batch_size)
             d_state = self.discriminator.init_hidden(real_batch_size)
 
             z = self.generator.generate_noise(real_batch_size)
-            fake_data, _ = self.generator(z, buttonTargets, g_state)
+            fake_traj, _ = self.generator(z, buttonTargets, g_state)
 
             ### train discriminator ###
             # for ii in range(self.discriminator_steps):
             d_real_out, _, _ = self.discriminator(mouse_trajectories, buttonTargets, d_state)
-            d_fake_out, _, _ = self.discriminator(fake_data, buttonTargets, d_state)
+            d_fake_out, _, _ = self.discriminator(fake_traj, buttonTargets, d_state)
 
-            d_loss = self.discriminatorLoss(d_real_out, d_fake_out, mouse_trajectories, fake_data, buttonTargets, d_state)
+            d_loss = self.discriminatorLoss(d_real_out, d_fake_out, mouse_trajectories, fake_traj, buttonTargets, d_state)
             self.optimizer_D.zero_grad() # clear previous gradients
             d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
             self.optimizer_D.step() # perform updates using calculated gradients
@@ -376,3 +452,17 @@ class MouseGAN(GAN):
             self.scheduler_G.step()
 
         return d_loss_total / len(dataloader), g_loss_total / len(dataloader)
+
+    def generate(self, rawButtonTargets):
+        """
+        returns unnormalized trajectories
+        """      
+        normButtonTargets = self.dataset.normalizeButtonTargets(rawButtonTargets)[:,:4].to(self.device)
+        samples = rawButtonTargets.shape[0]
+        self.generator.eval()
+        with torch.no_grad():
+            z = self.generator.generate_noise(samples)
+            g_state = self.generator.init_hidden(samples)
+            fake_traj, _ = self.generator(z, normButtonTargets, g_state)
+            generated_traj = self.dataset.denormalizeTraj(fake_traj.cpu().numpy())
+        return generated_traj
