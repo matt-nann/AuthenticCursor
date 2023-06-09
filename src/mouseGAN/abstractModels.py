@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.autograd.variable import Variable
 import glob
+import time
 
 CKPT_DIR = os.getcwd() + '/data/local/ganModels'
 try:
@@ -127,58 +128,7 @@ class GAN(metaclass=abc.ABCMeta):
         self.startingEpoch = startingEpoch
 
     def train_epoch(self, dataloader):
-        g_loss_total, d_loss_total = 0.0, 0.0
-        for i, dataTuple in enumerate(dataloader, 0): 
-            mouse_trajectories, buttonTargets, trajectoryLengths = dataTuple
-            mouse_trajectories, buttonTargets, trajectoryLengths = dataTuple
-            # if len(mouse_trajectories) != BATCH_SIZE:
-            #     continue
-            mouse_trajectories = mouse_trajectories.to(self.device)
-            buttonTargets = buttonTargets.to(self.device).squeeze(1)
-
-            real_batch_size = mouse_trajectories.shape[0]
-
-            g_states = self.generator.init_hidden(real_batch_size)
-            d_state = self.discriminator.init_hidden(real_batch_size)
-
-            raise NotImplementedError
-            # train discriminator
-            if self.conditional_freezing and self.freeze_d:
-                real_data = Variable(real_data)
-                real_prediction = self.discriminator(real_data)
-                real_error = self.loss(real_prediction, Variable(torch.ones(batch_size, 1)))
-                real_error.backward()
-
-                fake_data = self.generator.generate_noise(batch_size).detach()
-                fake_prediction = self.discriminator(fake_data)
-                fake_error = self.loss(fake_prediction, Variable(torch.zeros(batch_size, 1)))
-                fake_error.backward()
-
-                self.optimizer_D.step()
-                self.optimizer_D.zero_grad()
-
-            # train generator
-            fake_data = self.generator.generate_noise(batch_size)
-            prediction = self.discriminator(fake_data)
-            error = self.loss(prediction, Variable(torch.ones(batch_size, 1)))
-            error.backward()
-
-            self.optimizer_G.step()
-            self.optimizer_G.zero_grad()
-
-            gen_loss = error
-            disc_loss = real_error + fake_error
-
-            accuracy = (torch.sum(real_prediction > 0.5) + torch.sum(fake_prediction < 0.5)).float() / (2 * batch_size)
-
-            if self.conditional_freezing:
-                self.freeze_d = False
-                if accuracy >= 95.0:
-                    self.freeze_d = True
-            g_loss_total += gen_loss.item()
-            d_loss_total += disc_loss.item()
-
-        return g_loss_total / len(dataloader), d_loss_total / len(dataloader)
+        raise NotImplementedError
     
     def save_models(self, num_epochs):
 
@@ -213,6 +163,7 @@ class GAN(metaclass=abc.ABCMeta):
         self.discriminator.train()
 
         for epoch in range(self.startingEpoch, num_epochs + self.startingEpoch):
+            s_time = time.time()
             d_loss, g_loss = self.train_epoch(dataloader)
             if sample_interval and (epoch % sample_interval) == 0:
                 raise NotImplementedError
@@ -221,9 +172,13 @@ class GAN(metaclass=abc.ABCMeta):
                                      output_dir=output_dir)
             if modelSaveInterval and (epoch % modelSaveInterval) == 0 and epoch != 0:
                 self.save_models(epoch)
-            print("%d D avg loss: %.3f G avg loss: %.3f" % (epoch, d_loss, g_loss))
+            print("%d D avg loss: %.3f G avg loss: %.3f time: %.1f" % (epoch, d_loss, g_loss, time.time() - s_time))
             self.discrim_loss.append(d_loss)
             self.gen_loss.append(g_loss)
+            try: # TODO hacky cause this is child function
+                self.visualTrainingVerfication(epoch=epoch)
+            except:
+                ...
 
         self.plot_loss(output_dir)
         self.save_models(epoch)

@@ -51,7 +51,8 @@ class GapScheduler(LRScheduler):
         lr_scaleFactor = self.lr_scheduler()
         if self.scale_history:
             shrinkTwice = self.scale_history[-1] < 1.0 and lr_scaleFactor < 1.0
-            growTwice = self.scale_history[-1] > 1.0 and lr_scaleFactor > 1.0
+            # growTwice = self.scale_history[-1] > 1.0 and lr_scaleFactor > 1.0
+            growTwice = False
             if (shrinkTwice or growTwice) and self.cooldown_timer > 0:
                 self.cooldown_timer -= 1
                 return self.base_lrs

@@ -119,7 +119,7 @@ class MouseGAN_Data:
         with open(self.dataLocal + '/synthetic_buttonTargets.pkl', 'rb') as f:
             self.fake_buttonTargets = pickle.load(f)
 
-    def plotTrajectory(self, df_sequence, df_target, sequence_id, fig=None):
+    def plotTrajectory(self, df_sequence, df_target, sequence_id, fig=None, title=None):
             if fig:
                 self.fig = fig
             elif self.SHOW_ONE:
@@ -196,7 +196,7 @@ class MouseGAN_Data:
                 maxLimit = max(max(df_sequence['x']), max(df_sequence['y']))
                 maxLimit = max(x1, y1, maxLimit)+10
                 self.fig.update_layout(
-                            title = 'Example Collected Mouse Trajectory',
+                            title = 'Example Collected Mouse Trajectory' if not title else title,
                             # title='Sequence {}'.format(sequence_id),
                             annotations= self.list_of_all_arrows + [text],
                             shapes=[square],
@@ -318,7 +318,8 @@ class MouseGAN_Data:
             self.saveTrajData(f_trajectory, buttonTarget)
             counter += 1
             if counter % int(len(self.fake_trajectories)*percentPrint) == 0:
-                print('processed fake data', counter, ' out of ', len(self.fake_trajectories))
+                print('processed fake data: ', counter, '/', len(self.fake_trajectories), end='\r')
+        print()
 
     def processMouseData(self, SHOW_ALL=False, SHOW_ONE=False, num_sequences=10, samples=None):
         self.fig = go.Figure()
@@ -450,7 +451,8 @@ class MouseGAN_Data:
         if not hasattr(self, 'mean_button'):
             raise ValueError('mean_button not calculated yet')
         norm_buttonTargets = buttonTargets - self.mean_button / self.std_button
-        return torch.tensor(norm_buttonTargets, dtype=torch.float32)
+        return norm_buttonTargets
+        # return torch.tensor(norm_buttonTargets, dtype=torch.float32)
     
     def denormalize(self, norm_input_trajectories, norm_buttonTargets):
         input_trajectories = []
@@ -516,6 +518,9 @@ class MouseGAN_Data:
         creating a bunch of random button targets and starting + ending locations
         if axial_resolution is specified, then the starting location will be evenly spaced around the circle
         """
+        if axial_resolution and axial_resolution > samples:
+            print('axial_resolution is greater than samples, setting axial_resolution to samples')
+            axial_resolution = samples
         if low_radius > high_radius:
             raise ValueError('low_radius must be less than or equal to high_radius')
         if min_width > max_width:
@@ -628,23 +633,14 @@ class MouseGAN_Data:
         )
         fig.show()
 
-    
-# x_center = left + df_target['width'].iloc[0]/2
-# y_center = top + df_target['height'].iloc[0]/2
-# print(x_center, y_center)
-# # for creating the original raw data again
-# print(start_x, start_y, left, top)
-# print(start_x + left, start_y + top)
-# df_sequence = df_sequence.copy()
-# df_sequence['cum_x'] = 0
-# df_sequence['cum_y'] = 0
-# df_sequence['temp_x'] = df_sequence['dx']
-# df_sequence['temp_y'] = df_sequence['dy']
-# # absolute positioning, where origin is button target
-# df_sequence['temp_x'].iloc[0] += start_x
-# df_sequence['temp_y'].iloc[0] += start_y
-# # to convert it into original raw screen pixels
-# df_sequence['temp_x'].iloc[0] += left
-# df_sequence['temp_y'].iloc[0] += top
-# df_sequence['cum_x'] = (df_sequence['temp_x'] ).cumsum()
-# df_sequence['cum_y'] = (df_sequence['temp_y'] ).cumsum()
+    def plotMeanPath(self):
+        averageMove = np.array(self.input_trajectories).mean(axis=0)
+        # averageMove = averageMove * dataset.std_traj + dataset.mean_traj
+        df_sequence = pd.DataFrame(averageMove, columns=['dx','dy'])
+        df_sequence['velocity'] = np.sqrt(df_sequence['dx']**2 + df_sequence['dy']**2) / self.FIXED_TIMESTEP
+        df_target = pd.DataFrame(np.array(self.buttonTargets).mean(axis=0), columns=[self.targetColumns])
+        sequence_id = 0
+        self.SHOW_ONE = True
+        self.SHOW_ALL = False
+        df_abs = self.convertToAbsolute(df_sequence, df_target)
+        fig = self.plotTrajectory(df_abs, df_target[['width','height','start_x','start_y']], sequence_id, title='Mean Path of entire dataset')

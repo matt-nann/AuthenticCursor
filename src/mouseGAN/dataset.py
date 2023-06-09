@@ -1,3 +1,7 @@
+import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
+
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
@@ -23,3 +27,35 @@ def getDataloader(norm_input_trajectories, norm_buttonTargets, batch_size):
     dataset = MouseMoveDataset(norm_input_trajectories, norm_buttonTargets)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=pad_collate)
     return dataloader
+
+def visualVertDataloader(dataloader, dataset, showNumBatches=1):
+    fig = go.Figure()
+    for i, data in enumerate(dataloader, 0): 
+        _input_trajectories_padded, _buttonTargets, trajectoryLengths = data
+        if i == showNumBatches:
+            break
+        for ii in range(len(_input_trajectories_padded)):
+            df_sequence = pd.DataFrame(_input_trajectories_padded[ii] * dataset.std_traj + dataset.mean_traj, columns=['dx','dy'])
+            df_sequence['velocity'] = np.sqrt(df_sequence['dx']**2 + df_sequence['dy']**2) / dataset.FIXED_TIMESTEP
+            df_target = pd.DataFrame(_buttonTargets[ii] * dataset.std_button + dataset.mean_button, columns=[dataset.targetColumns])
+            sequence_id = 0
+            dataset.SHOW_ONE = True
+            df_abs = dataset.convertToAbsolute(df_sequence, df_target)
+
+            fig.add_trace(go.Scatter(x=df_abs['x'], y=df_abs['y'],
+                    mode='lines+markers',
+                    showlegend=False,
+                    marker=dict(
+                        size=5, 
+                        # symbol= "arrow-bar-up", angleref="previous",
+                        # size=15,
+                        # color='grey',),
+                        color=df_abs['velocity'], colorscale='Viridis', showscale=True, 
+                        colorbar=None,
+                        # colorbar=dict(title="Velocity")),
+                    )))
+    fig.update_layout(
+        title=str(showNumBatches) + " batches of dataloader, data has been unnormalized to verify correctness",
+        width=700,
+        height=700,)
+    fig.show()

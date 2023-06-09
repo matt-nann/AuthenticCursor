@@ -172,3 +172,6 @@ cloud.env
 
 /src/mouseGAN/data/MNIST/raw/*
 demo.ipynb
+
+wandb/*
+runs/*
