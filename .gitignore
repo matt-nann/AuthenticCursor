@@ -169,9 +169,13 @@ cloud.env
 *.pth
 /venvDev
 /data/MNIST/*
+WANDB_examples/MNIST/*
+WANDB_examples/artifacts/*
+WANDB_examples/wandb/*
 
 /src/mouseGAN/data/MNIST/raw/*
 demo.ipynb
 
 wandb/*
 runs/*
+artifacts/*
