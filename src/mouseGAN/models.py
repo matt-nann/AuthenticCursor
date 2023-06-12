@@ -579,7 +579,7 @@ class MouseGAN(GAN):
         generated_trajs = self.generate(_rawButtonTargets)
         shapes = []
         for i in range(samples):
-            generated_traj = generated_trajs[i]
+            generated_traj = generated_trajs[i].cpu().numpy()
             rawButtonTarget = rawButtonTargets[i]
             df_sequence = pd.DataFrame(generated_traj, columns=self.dataset.trajColumns)
             df_target = pd.DataFrame([rawButtonTarget], columns=self.dataset.targetColumns)
