@@ -577,9 +577,11 @@ class MouseGAN(GAN):
         min_height = np.min(rawButtonTargets[:,1])
         _rawButtonTargets = torch.tensor(rawButtonTargets, dtype=torch.float32).to(self.device)
         generated_trajs = self.generate(_rawButtonTargets)
+        _rawButtonTargets = _rawButtonTargets.cpu().numpy()
+        generated_trajs = generated_trajs.cpu().numpy()
         shapes = []
         for i in range(samples):
-            generated_traj = generated_trajs[i].cpu().numpy()
+            generated_traj = generated_trajs[i]
             rawButtonTarget = rawButtonTargets[i]
             df_sequence = pd.DataFrame(generated_traj, columns=self.dataset.trajColumns)
             df_target = pd.DataFrame([rawButtonTarget], columns=self.dataset.targetColumns)
