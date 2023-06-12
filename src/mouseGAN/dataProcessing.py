@@ -69,12 +69,13 @@ class MouseGAN_Data:
     allButtonColumns = ['left','top','width','height','start_x','start_y','end_x','end_y']
     targetColumns = ['width','height','start_x','start_y','end_x','end_y']
     FIXED_TIMESTEP = 0.008
-    def __init__(self, USE_FAKE_DATA=False, 
+    def __init__(self, USE_FAKE_DATA=False, TRAIN_TEST_SPLIT=0.8, 
                 equal_length=True, lowerLimit = 25, upperLimit = 50):
         self.equal_length = equal_length
         self.lowerLimit = lowerLimit
         self.upperLimit = upperLimit
         self.USE_FAKE_DATA = USE_FAKE_DATA
+        self.TRAIN_TEST_SPLIT = TRAIN_TEST_SPLIT
         self.shapes = []
         self.list_of_all_arrows = []
 
@@ -135,7 +136,6 @@ class MouseGAN_Data:
                             # size=15,
                             # color='grey',),
                             color=df_sequence['velocity'], colorscale='Viridis', showscale=True, colorbar=dict(title="Velocity")),
-                
                 ))
 
             min_velocity, max_velocity = df_sequence['velocity'].min(), df_sequence['velocity'].max()
@@ -254,13 +254,17 @@ class MouseGAN_Data:
             df_reg[col].iloc[0] = 0
         return df_reg
     
-    def saveTrajData(self, df_regulSeq, df_target):
+    def saveTrajData(self, i_sample, totalSamples, df_regulSeq, df_target):
+        """
+        only add values to the group statistics if this is a training sample
+        """
         self.input_trajectories.append(df_regulSeq[self.trajColumns].values)
         self.buttonTargets.append(df_target[self.targetColumns].values)
-        for i, name in enumerate(self.trajColumns):
-            self.trajectoryValues[i] += list(df_regulSeq[name].values)
-        for i, name in enumerate(self.targetColumns):
-            self.targetValues[i] += list(df_target[name].values)
+        if i_sample < self.TRAIN_TEST_SPLIT * totalSamples:
+            for i, name in enumerate(self.trajColumns):
+                self.trajectoryValues[i] += list(df_regulSeq[name].values)
+            for i, name in enumerate(self.targetColumns):
+                self.targetValues[i] += list(df_target[name].values)
 
     def convertToAbsolute(self, df_sequence, df_target):
         start_x = df_target['start_x'].iloc[0]
@@ -288,6 +292,7 @@ class MouseGAN_Data:
             sampleIndexes = range(len(self.fake_trajectories))
         else:
             sampleIndexes = np.random.choice(len(self.fake_trajectories), samples, replace=False)
+        totalRecords = len(sampleIndexes)
         for i in sampleIndexes:
             trajectory = self.fake_trajectories[i]
             buttonTarget = self.fake_buttonTargets[i]
@@ -315,13 +320,16 @@ class MouseGAN_Data:
                 f_trajectory.at[0, col] = 0
             # df_cleanedSeq = self.remove_consecutive_zero_velocity_rows(f_trajectory)
             f_trajectory = f_trajectory[self.trajColumns]
-            self.saveTrajData(f_trajectory, buttonTarget)
+            self.saveTrajData(i, totalRecords, f_trajectory, buttonTarget)
             counter += 1
             if counter % int(len(self.fake_trajectories)*percentPrint) == 0:
                 print('processed fake data: ', counter, '/', len(self.fake_trajectories), end='\r')
         print()
 
     def processMouseData(self, SHOW_ALL=False, SHOW_ONE=False, num_sequences=10, samples=None):
+        """
+            only the training data is used in the dataset statistics for normalization
+        """
         self.fig = go.Figure()
         self.shapes, self.list_of_all_arrows = [], []
         self.SHOW_ALL = SHOW_ALL
@@ -339,7 +347,7 @@ class MouseGAN_Data:
             if self.equal_length:
                 df_moves = self.df_moves
                 df_moves = df_moves[df_moves['sequence_id'].isin(df_moves['sequence_id'].value_counts()[(df_moves['sequence_id'].value_counts() > self.lowerLimit) & (df_moves['sequence_id'].value_counts() < self.upperLimit)].index)]
-
+            totalRecords = len(self.df_moves['sequence_id'].unique())
             for sequence_id, df_sequence in df_moves.groupby('sequence_id'):
                 df_sequence = df_sequence.sort_values(by=['clientTimestamp'])
                 df_sequence.drop(['sequence_id'], axis=1, inplace=True)
@@ -389,7 +397,7 @@ class MouseGAN_Data:
                 df_cleanedSeq = self.remove_consecutive_zero_velocity_rows(df_EquSeq)
                 # display(df_cleanedSeq)
                 df_regulSeq = self.regularize_TimeSeries(df_cleanedSeq, df_target)
-                self.saveTrajData(df_EquSeq, df_target)
+                self.saveTrajData(counter, totalRecords, df_EquSeq, df_target)
                 # display(df_regulSeq)
                 
                 if SHOW_ONE or SHOW_ALL:
@@ -414,16 +422,16 @@ class MouseGAN_Data:
                 # display(df_sequence.head(3))
             # print(df_sequence)
             # print(df_target)
-
-            # chop off 1 if not even
-            if len(self.input_trajectories) % 2 != 0:
-                self.input_trajectories = self.input_trajectories[:-1]
-                self.buttonTargets = self.buttonTargets[:-1]
-        
+            
+        # all normalization happens together but only training samples were used to calculate group statistics
+        # E.G test samples are normalized with training dataset statistics
         norm_input_trajectories, norm_buttonTargets = self.normalize(self.input_trajectories, self.buttonTargets)
-        print('Number of sequences:', len(self.input_trajectories))
-        return norm_input_trajectories, norm_buttonTargets
-        # return df_regulSeq, df_target, df_target['start_x'].iloc[0], df_target['start_y'].iloc[0], left, top
+        train_trajs = norm_input_trajectories[:int(len(norm_input_trajectories)*self.TRAIN_TEST_SPLIT)]
+        train_targets = norm_buttonTargets[:int(len(norm_buttonTargets)*self.TRAIN_TEST_SPLIT)]
+        test_trajs = norm_input_trajectories[int(len(norm_input_trajectories)*self.TRAIN_TEST_SPLIT):]
+        test_targets = norm_buttonTargets[int(len(norm_buttonTargets)*self.TRAIN_TEST_SPLIT):]
+        print("training samples: ", len(train_trajs), "test samples: ", len(test_trajs))
+        return train_trajs, train_targets, test_trajs, test_targets
     
     def _calcDistributionMetrics(self):
         # every column is getting normalized individually
@@ -447,13 +455,6 @@ class MouseGAN_Data:
             norm_buttonTargets.append(torch.tensor(norm_target, dtype=torch.float32))
         return norm_input_trajectories, norm_buttonTargets
     
-    # def normalizeButtonTargets(self, buttonTargets):
-    #     if not hasattr(self, 'mean_button'):
-    #         raise ValueError('mean_button not calculated yet')
-    #     norm_buttonTargets = buttonTargets - self.mean_button / self.std_button
-    #     return norm_buttonTargets
-    #     # return torch.tensor(norm_buttonTargets, dtype=torch.float32)
-    
     def denormalize(self, norm_input_trajectories, norm_buttonTargets):
         input_trajectories = []
         buttonTargets = []
@@ -463,11 +464,6 @@ class MouseGAN_Data:
             target = norm_buttonTargets[i] * self.std_button + self.mean_button
             buttonTargets.append(target)
         return input_trajectories, buttonTargets
-    
-    # def denormalizeTraj(self, norm_input_trajectories):
-    #     if not hasattr(self, 'mean_traj'):
-    #         raise ValueError('mean_traj not calculated yet')
-    #     return norm_input_trajectories * self.std_traj + self.mean_traj
     
     def generateGaussianButtonClicks(self, width, height):
         # The center of the button
