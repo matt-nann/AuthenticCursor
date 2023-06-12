@@ -144,45 +144,6 @@ class GAN(metaclass=abc.ABCMeta):
         torch.save(self.discriminator.state_dict(), discriminatorPath)
         print("\tSaved discriminator: %s" % discriminatorPath)
 
-    def train(self, dataloader, num_epochs, modelSaveInterval=None,
-              sample_interval=None, num_plot_paths=10, output_dir=os.getcwd()):
-        """
-        Args:
-            real_paths (np.ndarray): Total dataset
-            num_epochs (int): number of batches to train for
-            sample_interval (int): When to sample
-            num_plot_paths (int): Number of paths to sample
-            output_dir (str): where to save the models and sample images
-            save_format (str): one of 'h5' or 'tf'
-            initial_epoch (int): The initial epoch to start training from
-        """
-        self.freeze_d = False
-        self.discrim_loss = []
-        self.gen_loss = []
-        self.generator.train()
-        self.discriminator.train()
-
-        for epoch in range(self.startingEpoch, num_epochs + self.startingEpoch):
-            s_time = time.time()
-            d_loss, g_loss = self.train_epoch(dataloader)
-            if sample_interval and (epoch % sample_interval) == 0:
-                raise NotImplementedError
-                # Saving 3 predictions
-                self.save_prediction(epoch, num_plot_paths,
-                                     output_dir=output_dir)
-            if modelSaveInterval and (epoch % modelSaveInterval) == 0 and epoch != 0:
-                self.save_models(epoch)
-            print("%d D avg loss: %.3f G avg loss: %.3f time: %.1f" % (epoch, d_loss, g_loss, time.time() - s_time))
-            self.discrim_loss.append(d_loss)
-            self.gen_loss.append(g_loss)
-            try: # TODO hacky cause this is child function
-                self.visualTrainingVerfication(epoch=epoch)
-            except:
-                ...
-
-        self.plot_loss(output_dir)
-        self.save_models(epoch)
-
     def plot_loss(self, output_dir=os.getcwd()):
         plt.plot(self.discrim_loss, c='red')
         plt.plot(self.gen_loss, c='blue')

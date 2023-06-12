@@ -28,7 +28,7 @@ def getDataloader(norm_input_trajectories, norm_buttonTargets, batch_size):
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=pad_collate)
     return dataloader
 
-def visualVertDataloader(dataloader, dataset, showNumBatches=1):
+def visuallyVertifyDataloader(dataloader, dataset, showNumBatches=1):
     fig = go.Figure()
     for i, data in enumerate(dataloader, 0): 
         _input_trajectories_padded, _buttonTargets, trajectoryLengths = data

@@ -513,7 +513,7 @@ class MouseGAN_Data:
                             low_radius = 100, high_radius = 1000,
                             max_width = 200, min_width = 50,
                             max_height = 100, min_height = 25,
-                            axial_resolution = None):
+                            axial_resolution = None, seed=None):
         """
         creating a bunch of random button targets and starting + ending locations
         if axial_resolution is specified, then the starting location will be evenly spaced around the circle
@@ -536,25 +536,29 @@ class MouseGAN_Data:
             iterations = axial_resolution
             set_angles = np.linspace(0, 2*np.pi, axial_resolution)
         all_rawButtonTargets = []
+
+        # Choose which RandomState to use
+        random_state = np.random.RandomState(seed) if seed is not None else np.random
+
         for i in range(iterations):
             if low_radius == high_radius:
                 radiuses = np.ones(samples) * low_radius
             else:
-                radiuses = np.random.rand(samples) * (high_radius - low_radius) + low_radius
+                radiuses = random_state.rand(samples) * (high_radius - low_radius) + low_radius
             if axial_resolution:
                 angles = np.ones(samples) * set_angles[i]
             else:
-                angles = np.random.rand(samples) * 2 * np.pi
+                angles = random_state.rand(samples) * 2 * np.pi
             x_i = radiuses * np.cos(angles)
             y_i = radiuses * np.sin(angles)
             if max_width == min_width:
                 targetWidths = np.ones(samples) * max_width
             else:
-                targetHeights = np.random.rand(samples) * (max_height - min_height) + min_height
+                targetHeights = random_state.rand(samples) * (max_height - min_height) + min_height
             if max_height == min_height:
                 targetHeights = np.ones(samples) * max_height
             else:
-                targetWidths = np.random.rand(samples) * (max_width - min_width) + min_width
+                targetWidths = random_state.rand(samples) * (max_width - min_width) + min_width
             # TODO optimize
             endLocs = [self.generateGaussianButtonClicks(width, height) for width, height in zip(targetWidths, targetHeights)]
             x_f = np.array([loc[0] for loc in endLocs])
@@ -562,6 +566,7 @@ class MouseGAN_Data:
             rawButtonTargets = np.stack([targetWidths, targetHeights, x_i, y_i, x_f, y_f], axis=1)
             all_rawButtonTargets.append(rawButtonTargets)
         return np.concatenate(all_rawButtonTargets, axis=0)
+
     
     def createFakeWindMouseDataset(self, save=False,
                                 samples = 50000,

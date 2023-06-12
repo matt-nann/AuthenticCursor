@@ -1,16 +1,18 @@
 import torch
 import torch.nn as nn
 
+from .model_config import Config
+
 class MinibatchDiscrimination(nn.Module):
     """
     Prevents generator creating similar results (mode collapse) by allowing discriminator to receive batch statistics
     """
-    def __init__(self, input_features, num_kernels, kernel_dim):
+    def __init__(self, config : Config, input_features):
         super(MinibatchDiscrimination, self).__init__()
         self.input_features = input_features
-        self.num_kernels = num_kernels
-        self.kernel_dim = kernel_dim
-        self.T = nn.Parameter(torch.randn(input_features, num_kernels * kernel_dim))
+        self.num_kernels = config.miniBatchDisc.num_kernels
+        self.kernel_dim = config.miniBatchDisc.kernel_dim
+        self.T = nn.Parameter(torch.randn(input_features, self.num_kernels * self.kernel_dim))
 
     def forward(self, x):
         # input x shape : (batch_size, sequence_length, number_features)
