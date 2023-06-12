@@ -269,15 +269,15 @@ class MouseGAN_Data:
         df_abs['temp_x'] = df_abs['dx']
         df_abs['temp_y'] = df_abs['dy']
         # absolute positioning, where origin is button target
-        df_abs['temp_x'].iloc[0] += start_x
-        df_abs['temp_y'].iloc[0] += start_y
+        df_abs.iloc[0,df_abs.columns.get_loc('temp_x')] += start_x
+        df_abs.iloc[0,df_abs.columns.get_loc('temp_y')] += start_y
         # to convert it into original raw screen pixels
         # df_abs['temp_x'].iloc[0] += left
         # # df_abs['temp_y'].iloc[0] += top
         if 'velocity' not in df_abs.columns:
             df_abs['velocity'] = np.sqrt(df_abs['dx']**2 + df_abs['dy']**2)
-        df_abs['x'] = (df_abs['temp_x'] ).cumsum()
-        df_abs['y'] = (df_abs['temp_y'] ).cumsum()
+        df_abs['x'] = (df_abs['temp_x'] ).cumsum(False)
+        df_abs['y'] = (df_abs['temp_y'] ).cumsum(False)
         return df_abs
     
     def processFakeData(self, samples, percentPrint):
@@ -447,12 +447,12 @@ class MouseGAN_Data:
             norm_buttonTargets.append(torch.tensor(norm_target, dtype=torch.float32))
         return norm_input_trajectories, norm_buttonTargets
     
-    def normalizeButtonTargets(self, buttonTargets):
-        if not hasattr(self, 'mean_button'):
-            raise ValueError('mean_button not calculated yet')
-        norm_buttonTargets = buttonTargets - self.mean_button / self.std_button
-        return norm_buttonTargets
-        # return torch.tensor(norm_buttonTargets, dtype=torch.float32)
+    # def normalizeButtonTargets(self, buttonTargets):
+    #     if not hasattr(self, 'mean_button'):
+    #         raise ValueError('mean_button not calculated yet')
+    #     norm_buttonTargets = buttonTargets - self.mean_button / self.std_button
+    #     return norm_buttonTargets
+    #     # return torch.tensor(norm_buttonTargets, dtype=torch.float32)
     
     def denormalize(self, norm_input_trajectories, norm_buttonTargets):
         input_trajectories = []
@@ -464,10 +464,10 @@ class MouseGAN_Data:
             buttonTargets.append(target)
         return input_trajectories, buttonTargets
     
-    def denormalizeTraj(self, norm_input_trajectories):
-        if not hasattr(self, 'mean_traj'):
-            raise ValueError('mean_traj not calculated yet')
-        return norm_input_trajectories * self.std_traj + self.mean_traj
+    # def denormalizeTraj(self, norm_input_trajectories):
+    #     if not hasattr(self, 'mean_traj'):
+    #         raise ValueError('mean_traj not calculated yet')
+    #     return norm_input_trajectories * self.std_traj + self.mean_traj
     
     def generateGaussianButtonClicks(self, width, height):
         # The center of the button

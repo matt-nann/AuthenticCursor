@@ -80,6 +80,23 @@ class C_LOSS_FUNC:
             assert isinstance(self.params, C_LSGAN)
 
 @dataclass
+class C_Discriminator:
+    hidden_units: int = 128
+    num_layers: int = 4
+    lr: float = 0.0001
+    # A Bidirectional LSTM (BiLSTM) captures information from both past and future states by processing the sequence in both forward and backward directions. This provides additional context, improving performance in tasks where future context is informative.
+    bidirectional: bool = False 
+    miniBatchDisc: Optional[C_MiniBatchDisc] = C_MiniBatchDisc()
+    useEndDeviationLoss: bool = False
+    
+@dataclass
+class C_Generator:
+    hidden_units: int = 128
+    lr: float = 0.0001
+    useOutsideTargetLoss: bool = False
+    drop_prob: float = 0.5
+
+@dataclass
 class Config:
     num_epochs: int
     BATCH_SIZE: int
@@ -87,15 +104,12 @@ class Config:
     latent_dim: int
     num_target_feats: int
     MAX_SEQ_LEN: int
-    initial_g_lr: float = 0.0001
-    initial_d_lr: float = 0.0001
-    miniBatchDisc: Optional[C_MiniBatchDisc] = C_MiniBatchDisc()
     G_lr_scheduler: Optional[C_G_lrScheduler] = None
     D_lr_scheduler: Optional[C_D_lrScheduler] = None
     locationMSELoss: bool = False
-    use_D_endDeviationLoss: bool = False
-    use_G_OutsideTargetLoss: bool = False
     lossFunc: C_LOSS_FUNC = C_LOSS_FUNC()
+    discriminator: C_Discriminator = C_Discriminator()
+    generator: C_Generator = C_Generator()
 
     def __post_init__(self):
         if self.G_lr_scheduler is None:
