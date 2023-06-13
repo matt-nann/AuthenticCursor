@@ -168,7 +168,6 @@ class ReduceLROnPlateauWithEMA:
         self.prev_metric = smoothed_metric
         if self.scheduler.verbose:
             print(f"\t\t EMA metric: {smoothed_metric:.3f} metric {metric:.3f}")
-        self.LR_history.append(self.scheduler.optimizer.param_groups[0]['lr'])
         self.scheduler.step(smoothed_metric)
 
     def state_dict(self):

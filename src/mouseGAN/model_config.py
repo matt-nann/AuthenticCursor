@@ -35,7 +35,7 @@ class LOSS_FUNC(Enum):
     LSGAN = 'lsgan_loss_function'
 
 @dataclass
-class C_D_lrScheduler:
+class C_LossGap_Sch:
     cooldown: int
     type: LR_SCHEDULERS = LR_SCHEDULERS.LOSS_GAP_AWARE
     ideal_loss: float = 0.5 # LSGAN
@@ -43,19 +43,27 @@ class C_D_lrScheduler:
     loss_min: float = 0.1 * ideal_loss
     loss_max: float = 0.1 * ideal_loss
     lr_shrinkMin: float = 0.1
-    discLossDecay: float = 0.8
     lr_growthMax: float = 2.0
+    discLossDecay: float = 0.8
+
 @dataclass
-class C_G_lrScheduler:
+class C_Step_Sch:
+    step_size: int
+    gamma: float
+    type : LR_SCHEDULERS = LR_SCHEDULERS.STEP
+
+@dataclass
+class C_EMA_Plateua_Sch:
     patience: int
     cooldown: int
-    type: LR_SCHEDULERS = LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA
+    type: LR_SCHEDULERS = LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA    
     factor: float = 0.5
     min_lr: float = 1e-9
     verbose: bool = False
     ema_alpha: float = 0.4
     threshold_mode: str = 'rel'
     threshold: float = 1 / 100
+
 @dataclass
 class C_MiniBatchDisc:
     num_kernels: int = 5
@@ -104,8 +112,8 @@ class Config:
     latent_dim: int
     num_target_feats: int
     MAX_SEQ_LEN: int
-    G_lr_scheduler: Optional[C_G_lrScheduler] = None
-    D_lr_scheduler: Optional[C_D_lrScheduler] = None
+    D_lr_scheduler: Optional[Union[C_EMA_Plateua_Sch, C_Step_Sch, C_LossGap_Sch]] = None
+    G_lr_scheduler: Optional[Union[C_EMA_Plateua_Sch, C_Step_Sch]] = None
     locationMSELoss: bool = False
     lossFunc: C_LOSS_FUNC = C_LOSS_FUNC()
     discriminator: C_Discriminator = C_Discriminator()
@@ -113,6 +121,6 @@ class Config:
 
     def __post_init__(self):
         if self.G_lr_scheduler is None:
-            self.G_lr_scheduler = C_G_lrScheduler(patience=self.BATCH_SIZE, cooldown=int(self.BATCH_SIZE/8))
+            self.G_lr_scheduler = C_EMA_Plateua_Sch(patience=self.BATCH_SIZE, cooldown=int(self.BATCH_SIZE/8))
         if self.D_lr_scheduler is None:
-            self.D_lr_scheduler = C_D_lrScheduler(cooldown=int(self.BATCH_SIZE/8))
+            self.D_lr_scheduler = C_LossGap_Sch(cooldown=int(self.BATCH_SIZE/8))

@@ -222,11 +222,12 @@ class MouseGAN(GAN):
     while the generator minimizes the critic's evaluations of its generated samples, leading to a negative loss.
     """
     def __init__(self, dataset: MouseGAN_Data, trainLoader: DataLoader, testLoader: DataLoader,
-                device, c : Config, verbose=False,printBatch=False) -> GAN:
+                device, c : Config,IN_COLAB=False, verbose=False,printBatch=False) -> GAN:
         self.c = c
         self.device = device
         self.verbose = verbose
         self.printBatch = printBatch
+        self.IN_COLAB = IN_COLAB
 
         if not isinstance(dataset, MouseGAN_Data):
             raise ValueError("dataset must be an instance of MouseGAN_Data")
@@ -322,6 +323,7 @@ class MouseGAN(GAN):
             except: 
                 ...
             for epoch in range(self.startingEpoch, self.c.num_epochs + self.startingEpoch):
+                self.epoch_metrics = {}
                 s_time = time.time()
                 d_loss, g_loss = self.train_epoch(epoch)
                 if sample_interval and (epoch % sample_interval) == 0:
@@ -331,13 +333,13 @@ class MouseGAN(GAN):
                                         output_dir=output_dir)
                 if modelSaveInterval and (epoch % modelSaveInterval) == 0 and epoch != 0:
                     self.save_models(epoch)
-                self.epoch_metrics = {'epoch': epoch, 'd_loss': d_loss, 'g_loss': g_loss, 'epochTime': time.time()-s_time}
+                self.epoch_metrics.update({'epoch': epoch, 'd_loss': d_loss, 'g_loss': g_loss, 'epochTime': time.time()-s_time})
                 self.discrim_loss.append(d_loss)
                 self.gen_loss.append(g_loss)
                 self.visualTrainingVerfication(epoch=epoch)
                 self.validation()
                 if self.verbose:
-                    epochMetricsFormatted = {k: f'{v:.4f}' if isinstance(v, float) else v for k, v in self.epoch_metrics.items()}
+                    epochMetricsFormatted = {k: f'{v:.5f}' if isinstance(v, float) else v for k, v in self.epoch_metrics.items()}
                     print(epochMetricsFormatted)
                 wandb.log(self.epoch_metrics, step=(epoch+1) * self.trainBatches)
 
@@ -521,6 +523,13 @@ class MouseGAN(GAN):
 
             g_loss_total += g_loss.item()
             d_loss_total += d_loss.item()
+            
+            if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
+                self.scheduler_D.step(d_loss)
+                self.batchMetrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
+            if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value == LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
+                self.scheduler_G.step(g_loss.item())
+                self.batchMetrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
 
             if self.printBatch:
                 print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, self.trainBatches, d_loss.item(),  g_loss.item()), end="\n")
@@ -530,18 +539,12 @@ class MouseGAN(GAN):
             except:
                 ...
             
-            if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
-                self.scheduler_D.step(d_loss)
-            if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value == LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
-                self.scheduler_G.step(g_loss.item())
-                # print(f"\t\tschedulers step D_lr: {self.optimizer_D.param_groups[0]['lr']}, G_lr: {self.optimizer_G.param_groups[0]['lr']}")
-            # if i > 3:
-            #     break
         if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value != LR_SCHEDULERS.LOSS_GAP_AWARE.value:
             self.scheduler_D.step()
+            self.epoch_metrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
         if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value != LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
             self.scheduler_G.step()
-
+            self.epoch_metrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
         return d_loss_total /  self.trainBatches, g_loss_total / self.trainBatches
 
     def generate(self, rawButtonLocs):
@@ -577,8 +580,8 @@ class MouseGAN(GAN):
         min_height = np.min(rawButtonTargets[:,1])
         _rawButtonTargets = torch.tensor(rawButtonTargets, dtype=torch.float32).to(self.device)
         generated_trajs = self.generate(_rawButtonTargets)
-        _rawButtonTargets = _rawButtonTargets.cpu().numpy()
-        generated_trajs = generated_trajs.cpu().numpy()
+        _rawButtonTargets = _rawButtonTargets.detach().cpu().numpy()
+        generated_trajs = generated_trajs.detach().cpu().numpy()
         shapes = []
         for i in range(samples):
             generated_traj = generated_trajs[i]
@@ -639,7 +642,8 @@ class MouseGAN(GAN):
             title=title,
             margin=dict(l=0, r=0, b=0, t=30),
         )
-        fig.show()
+        if not self.IN_COLAB:
+            fig.show()
 
         try:
             # Convert the figure to a JPEG image and log using wandb
