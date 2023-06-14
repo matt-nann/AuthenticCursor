@@ -45,8 +45,8 @@ class C_LossGap_Sch:
     lr_shrinkMin: float = 0.1
     lr_growthMax: float = 2.0
     discLossDecay: float = 0.8
-    lr_max = 0.001
-    lr_min = 1*10**(-9)
+    lr_max: float = 0.001
+    lr_min: float = 1*10**(-9)
 
 @dataclass
 class C_Step_Sch:
@@ -92,7 +92,7 @@ class C_LOSS_FUNC:
 @dataclass
 class C_Discriminator:
     hidden_units: int = 128
-    num_layers: int = 4
+    num_lstm_layers: int = 4
     lr: float = 0.0001
     # A Bidirectional LSTM (BiLSTM) captures information from both past and future states by processing the sequence in both forward and backward directions. This provides additional context, improving performance in tasks where future context is informative.
     bidirectional: bool = False 
@@ -102,6 +102,7 @@ class C_Discriminator:
 @dataclass
 class C_Generator:
     hidden_units: int = 128
+    num_lstm_layers: int = 4
     lr: float = 0.0001
     useOutsideTargetLoss: bool = False
     drop_prob: float = 0.5

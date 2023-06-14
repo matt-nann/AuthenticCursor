@@ -51,26 +51,25 @@ def init_weights(m):
     elif type(m) == nn.Dropout:
         pass
     else:
-        if type(m) != MinibatchDiscrimination and type(m) != Generator or type(m) != Discriminator:
-            print('No initialization for', type(m))
+        if isinstance(m, nn.ModuleList) or isinstance(m, MinibatchDiscrimination) or isinstance(m, Generator) or isinstance(m, Discriminator):
+            pass
+        else:
+            raise ValueError("Unexpected module type {}".format(type(m)))
 
 class Generator(GeneratorBase):
-    ''' C-RNN-GAN generator
-    '''
-    def __init__(self, device, config: Config):
+    def __init__(self, device, config):
         c_g = config.generator
-        super(Generator, self).__init__(latent_dim=config.latent_dim, lr=c_g.lr)
-        # params
         self.config = config
+        super(Generator, self).__init__(latent_dim=config.latent_dim, lr=c_g.lr)
+        self.num_lstm_layers = c_g.num_lstm_layers  # number of LSTM layers
         self.device = device
         self.MAX_SEQ_LEN = config.MAX_SEQ_LEN
         self.hidden_units = c_g.hidden_units
-        # double the number features
-        self.fc_layer1 = nn.Linear(in_features=(config.num_feats * 2 + config.num_target_feats), out_features=c_g.hidden_units)
-        self.lstm_cell1 = nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units)
+        self.fc_layer1 = nn.Linear(in_features=(self.config.latent_dim + config.num_feats + config.num_target_feats), out_features=c_g.hidden_units)
+        # Use a list to manage all LSTM cells
+        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units) for _ in range(self.num_lstm_layers)])
         self.leaky_relu = nn.LeakyReLU(.2)
         self.dropout = nn.Dropout(p=c_g.drop_prob)
-        self.lstm_cell2 = nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units)
         self.fc_layer2 = nn.Linear(in_features=c_g.hidden_units, out_features=config.num_feats)
     
         for m in self.modules():
@@ -87,62 +86,47 @@ class Generator(GeneratorBase):
                 torch.manual_seed(seed)
                 if self.device.type == 'cuda':
                     torch.cuda.manual_seed(seed)
-            z = torch.randn([batch_size, self.MAX_SEQ_LEN, self.config.num_feats]).to(self.device)
+            z = torch.randn([batch_size, self.config.latent_dim]).to(self.device)
             z = z / z.norm(dim=-1, keepdim=True).to(self.device)
         return z
-
-
+        """
+        BATCH_SIZE = 10000000
+        z = torch.randn([BATCH_SIZE, 100])
+        z = z / z.norm(dim=-1, keepdim=True)
+        covariance_matrix = torch.matmul(z.T, z) / BATCH_SIZE
+        is_spherical = torch.allclose(covariance_matrix, torch.eye(covariance_matrix.shape[0]) * covariance_matrix.diag().mean(), atol=1e-5)
+        # always comes out to be false but everything points to that this is right
+        """
     def forward(self, z, buttonTarget, states):
-        # z: (batch_size, seq_len, num_feats)
-        # z here is the uniformly random vector
-        batch_size, seq_len, num_feats = z.shape
-
-        # # Generate the sequence length
-        # seq_len = self.sigmoid(self.linear(z))  # this is a tensor of sequence lengths
-        # seq_len = (seq_len * MAX_SEQ_LEN).long()  # this is a tensor of sequence lengths
-        # seq_len = seq_len + (seq_len == 0).long()
-
-        # split to seq_len * (batch_size * num_feats)
-        z = torch.split(z, 1, dim=1)
-        z = [z_step.squeeze(dim=1) for z_step in z]
-
-        # create dummy-previous-output for first timestep
-        prev_gen = torch.empty([batch_size, num_feats]).uniform_().to(self.device)
-        # TODO should I continuously pass in a new noise vector for every timestep
-
-        # manually process each timestep
-        state1, state2 = states # (h1, c1), (h2, c2)
+        batch_size, latent_dim = z.shape
+        prev_gen = torch.zeros([batch_size, self.config.num_feats]).uniform_().to(self.device)
+        state = states  # List of LSTM hidden states
         gen_feats = []
-        for i in range(seq_len):
-            z_step = z[i]
+        for i in range(self.config.MAX_SEQ_LEN):
             # concatenate current input features and previous timestep output features, and buttonTarget every sequence step
-            concat_in = torch.cat((z_step, prev_gen, buttonTarget), dim=-1)
+            concat_in = torch.cat((z, prev_gen, buttonTarget), dim=-1)
             out = self.leaky_relu(self.fc_layer1(concat_in))
-            h1, c1 = self.lstm_cell1(out, state1)
-            h1 = self.dropout(h1) # feature dropout only (no recurrent dropout)
-            h2, c2 = self.lstm_cell2(h1, state2)
-            prev_gen = self.fc_layer2(h2)
+            # Pass through each LSTM cell
+            for j in range(self.num_lstm_layers):
+                hidden, cell = self.lstm_cells[j](out if j == 0 else state[j-1][0], state[j])  # Pass the output from the previous layer or the input for the first layer
+                hidden = self.dropout(hidden)  # Apply dropout to the hidden state
+                state[j] = (hidden, cell)
+            prev_gen = self.fc_layer2(state[-1][0])  # The output from the final LSTM layer
             gen_feats.append(prev_gen)
-
-            state1 = (h1, c1)
-            state2 = (h2, c2)
-
         # seq_len * (batch_size * num_feats) -> (batch_size * seq_len * num_feats)
         gen_feats = torch.stack(gen_feats, dim=1)
+        return gen_feats, state
 
-        states = (state1, state2)
-        return gen_feats, states
 
     def init_hidden(self, batch_size):
-        ''' Initialize hidden state '''
-        # create NEW tensor with SAME TYPE as weight
+        ''' Initialize hidden state for each LSTM layer '''
         weight = next(self.parameters()).data
-        hidden = ((weight.new(batch_size, self.hidden_units).zero_().to(self.device),
-                    weight.new(batch_size, self.hidden_units).zero_().to(self.device)),
-                    (weight.new(batch_size, self.hidden_units).zero_().to(self.device),
-                    weight.new(batch_size, self.hidden_units).zero_().to(self.device)))
+        hidden = []
+        for _ in range(self.num_lstm_layers):
+            h = weight.new(batch_size, self.hidden_units).zero_().to(self.device)
+            c = weight.new(batch_size, self.hidden_units).zero_().to(self.device)
+            hidden.append((h, c))
         return hidden
-
 
 class Discriminator(DiscriminatorBase):
     ''' C-RNN-GAN discrminator
@@ -155,7 +139,7 @@ class Discriminator(DiscriminatorBase):
         self.miniBatchDisc = c_d.miniBatchDisc
         self.device = device
         self.hidden_units = c_d.hidden_units
-        self.num_layers = c_d.num_layers
+        self.num_layers = c_d.num_lstm_layers
         lstm_input_dim = config.num_feats + config.num_target_feats
 
         if self.useMiniBatchDisc:
@@ -163,7 +147,7 @@ class Discriminator(DiscriminatorBase):
             lstm_input_dim += self.miniBatchDisc.num_kernels
         # NOTE not using dropout because the number of input features is so small
         self.lstm = nn.LSTM(input_size=lstm_input_dim, hidden_size=self.hidden_units,
-                            num_layers=c_d.num_layers, batch_first=True, bidirectional=c_d.bidirectional)
+                            num_layers=c_d.num_lstm_layers, batch_first=True, bidirectional=c_d.bidirectional)
         self.num_lstm_output_feats = 2 * self.hidden_units if c_d.bidirectional else self.hidden_units
         self.score_layer = nn.Linear(in_features=(self.num_lstm_output_feats), out_features=1)
         # Spectral Normalization operates by normalizing the weights of the neural network layer using the spectral norm, 
@@ -284,32 +268,33 @@ class MouseGAN(GAN):
         self.generator.eval()
         self.discriminator.eval()
         val_g_loss_total, val_d_loss_total, correct = 0.0, 0.0, 0
-        for i, dataTuple in enumerate(self.testLoader, 0): 
-            mouse_trajectories, normButtons, normButtonLocs, trajectoryLengths, real_batch_size = self.prepare_batch(dataTuple)
+        with torch.no_grad():
+            for i, dataTuple in enumerate(self.testLoader, 0): 
+                mouse_trajectories, normButtons, normButtonLocs, trajectoryLengths, real_batch_size = self.prepare_batch(dataTuple)
 
-            g_states = self.generator.init_hidden(real_batch_size)
-            d_states = self.discriminator.init_hidden(real_batch_size)
+                g_states = self.generator.init_hidden(real_batch_size)
+                d_states = self.discriminator.init_hidden(real_batch_size)
 
-            z = self.generator.generate_noise(real_batch_size)
-            fake_traj, _ = self.generator(z, normButtons, g_states)
+                z = self.generator.generate_noise(real_batch_size)
+                fake_traj, _ = self.generator(z, normButtons, g_states)
 
-            d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, d_states)
-            d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj, normButtons, d_states)
+                d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, d_states)
+                d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj, normButtons, d_states)
 
-            d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
-                                            mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=True)
-            g_loss = self.generatorLoss(z, normButtonLocs, g_states, d_states, validation=True)
+                d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+                                                mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=True)
+                g_loss = self.generatorLoss(z, normButtonLocs, g_states, d_states, validation=True)
 
-            val_g_loss_total += g_loss.item()
-            val_d_loss_total += d_loss.item()
+                val_g_loss_total += g_loss.item()
+                val_d_loss_total += d_loss.item()
 
+                if self.c.lossFunc.type.value == LOSS_FUNC.LSGAN.value:
+                    correct += (d_real_out > 0).sum().item() + (d_fake_out < 0).sum().item()
             if self.c.lossFunc.type.value == LOSS_FUNC.LSGAN.value:
-                correct += (d_real_out > 0).sum().item() + (d_fake_out < 0).sum().item()
-        if self.c.lossFunc.type.value == LOSS_FUNC.LSGAN.value:
-            accuracy = correct / (self.testBatches * self.c.BATCH_SIZE * 2)
-            self.epoch_metrics['val_accuracy'] = accuracy
-        self.epoch_metrics['val_d_loss'] = val_d_loss_total / self.testBatches
-        self.epoch_metrics['val_g_loss'] = val_g_loss_total / self.testBatches
+                accuracy = correct / (self.testBatches * self.c.BATCH_SIZE * 2)
+                self.epoch_metrics['val_accuracy'] = accuracy
+            self.epoch_metrics['val_d_loss'] = val_d_loss_total / self.testBatches
+            self.epoch_metrics['val_g_loss'] = val_g_loss_total / self.testBatches
 
     def train(self, modelSaveInterval=None, sample_interval=None, num_plot_paths=10, 
               output_dir=os.getcwd(), catchErrors=False):
@@ -400,8 +385,8 @@ class MouseGAN(GAN):
         if self.locationMSELoss:
             g_losses = masked_dists
         else:
-            g_losses = masked_dists ** 0.5
-        g_losses = g_losses.abs()
+            # Lastly, you can add a small epsilon value before taking the square root to avoid taking the square root of zero:?
+            g_losses = ((masked_dists + 1e-8) ** 0.5)
         return g_losses.mean()
 
     def compute_gradient_penalty(self, real_samples, fake_samples, buttonTargets, d_state, phi=1):
@@ -493,60 +478,63 @@ class MouseGAN(GAN):
         return g_loss
 
     def train_epoch(self, epoch):
-        self.generator.train()
-        self.discriminator.train()
-        g_loss_total, d_loss_total = 0.0, 0.0
-        for i, dataTuple in enumerate(self.trainLoader, 0): 
-            self.batchMetrics = {}
-            mouse_trajectories, normButtons, normButtonLocs, trajectoryLengths, real_batch_size = self.prepare_batch(dataTuple)
+        with torch.autograd.set_detect_anomaly(True):
+            self.generator.train()
+            self.discriminator.train()
+            g_loss_total, d_loss_total = 0.0, 0.0
+            for i, dataTuple in enumerate(self.trainLoader, 0): 
+                self.batchMetrics = {}
+                mouse_trajectories, normButtons, normButtonLocs, trajectoryLengths, real_batch_size = self.prepare_batch(dataTuple)
 
-            g_states = self.generator.init_hidden(real_batch_size)
-            d_states = self.discriminator.init_hidden(real_batch_size)
+                g_states = self.generator.init_hidden(real_batch_size)
+                d_states = self.discriminator.init_hidden(real_batch_size)
 
-            z = self.generator.generate_noise(real_batch_size)
-            fake_traj, _ = self.generator(z, normButtons, g_states)
+                z = self.generator.generate_noise(real_batch_size)
+                fake_traj, _ = self.generator(z, normButtons, g_states)
 
-            ### train discriminator ###
-            # for ii in range(self.discriminator_steps):
-            d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, d_states)
-            d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj, normButtons, d_states)
+                ### train discriminator ###
+                # for ii in range(self.discriminator_steps):
+                d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, d_states)
+                d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj, normButtons, d_states)
 
-            d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
-                                            mouse_trajectories, fake_traj, normButtonLocs, d_states)
-            self.optimizer_D.zero_grad() # clear previous gradients
-            d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
-            self.optimizer_D.step() # perform updates using calculated gradients
+                self.optimizer_D.zero_grad() # clear previous gradients
+                d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+                                                mouse_trajectories, fake_traj, normButtonLocs, d_states)
+                d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
+                self.optimizer_D.step() # perform updates using calculated gradients
 
-            g_loss = self.generatorLoss(z, normButtonLocs, g_states, d_states)
-            self.optimizer_G.zero_grad()
-            g_loss.backward()
-            self.optimizer_G.step()
+                self.optimizer_G.zero_grad()
+                g_states = self.generator.init_hidden(real_batch_size)
+                d_states = self.discriminator.init_hidden(real_batch_size)
+                g_loss = self.generatorLoss(z, normButtonLocs, g_states, d_states)
+                g_loss.backward()
+                self.optimizer_G.step()
 
-            g_loss_total += g_loss.item()
-            d_loss_total += d_loss.item()
-            
-            if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
-                self.scheduler_D.step(d_loss)
-                self.batchMetrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
-            if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value == LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
-                self.scheduler_G.step(g_loss.item())
-                self.batchMetrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
+                g_loss_total += g_loss.item()
+                d_loss_total += d_loss.item()
+                
+                if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
+                    self.scheduler_D.step(d_loss)
+                    self.batchMetrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
+                if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value == LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
+                    self.scheduler_G.step(g_loss.item())
+                    self.batchMetrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
 
-            if self.printBatch:
-                print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, self.trainBatches, d_loss.item(),  g_loss.item()), end="\n")
-            try:
-                if i != self.trainBatches - 1:
-                    wandb.log(self.batchMetrics, step=epoch * self.trainBatches + i)
-            except:
-                ...
-            
-        if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value != LR_SCHEDULERS.LOSS_GAP_AWARE.value:
-            self.scheduler_D.step()
-            self.epoch_metrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
-        if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value != LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
-            self.scheduler_G.step()
-            self.epoch_metrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
-        return d_loss_total /  self.trainBatches, g_loss_total / self.trainBatches
+                if self.printBatch:
+                    print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, self.trainBatches, d_loss.item(),  g_loss.item()), end="\n")
+                try:
+                    if i != self.trainBatches - 1:
+                        wandb.log(self.batchMetrics, step=epoch * self.trainBatches + i)
+                except:
+                    ...
+                
+            if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value != LR_SCHEDULERS.LOSS_GAP_AWARE.value:
+                self.scheduler_D.step()
+                self.epoch_metrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
+            if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value != LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
+                self.scheduler_G.step()
+                self.epoch_metrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
+            return d_loss_total /  self.trainBatches, g_loss_total / self.trainBatches
 
     def generate(self, rawButtonLocs):
         """
