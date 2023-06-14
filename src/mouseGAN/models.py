@@ -281,7 +281,7 @@ class MouseGAN(GAN):
                 d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, d_states)
                 d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj, normButtons, d_states)
 
-                d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+                d_loss, base_d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
                                                 mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=True)
                 g_loss = self.generatorLoss(z, normButtonLocs, g_states, d_states, validation=True)
 
@@ -439,6 +439,7 @@ class MouseGAN(GAN):
             # Positive scores generally indicate that the discriminator considers the sample as real, while negative scores indicate the sample is classified as fake.
         else:
             raise ValueError("Invalid loss function")
+        base_d_loss = d_loss.clone()
         # additional loss components
         if self.c.discriminator.useEndDeviationLoss:
             g_finalLocations, realFinalLocations, _, _ = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
@@ -451,7 +452,7 @@ class MouseGAN(GAN):
         self.batchMetrics['d_real_out' + post] = d_real_out.mean().item()
         self.batchMetrics['d_fake_out' + post] = d_fake_out.mean().item()
         self.batchMetrics["d_loss" + post] = d_loss.item()
-        return d_loss
+        return d_loss, base_d_loss
     
     def generatorLoss(self, z, normButtonLocs, g_states, d_states, validation=False):
         normButtons = normButtonLocs[:, 0:4]
@@ -498,7 +499,7 @@ class MouseGAN(GAN):
                 d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj, normButtons, d_states)
 
                 self.optimizer_D.zero_grad() # clear previous gradients
-                d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+                d_loss, base_d_loss = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
                                                 mouse_trajectories, fake_traj, normButtonLocs, d_states)
                 d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
                 self.optimizer_D.step() # perform updates using calculated gradients
@@ -514,7 +515,7 @@ class MouseGAN(GAN):
                 d_loss_total += d_loss.item()
                 
                 if self.c.D_lr_scheduler and self.c.D_lr_scheduler.type.value == LR_SCHEDULERS.LOSS_GAP_AWARE.value:
-                    self.scheduler_D.step(d_loss)
+                    self.scheduler_D.step(base_d_loss)
                     self.batchMetrics["D_lr"] = self.optimizer_D.param_groups[0]['lr']
                 if self.c.G_lr_scheduler and self.c.G_lr_scheduler.type.value == LR_SCHEDULERS.REDUCE_ON_PLATEAU_EMA.value:
                     self.scheduler_G.step(g_loss.item())
