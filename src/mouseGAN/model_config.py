@@ -45,6 +45,8 @@ class C_LossGap_Sch:
     lr_shrinkMin: float = 0.1
     lr_growthMax: float = 2.0
     discLossDecay: float = 0.8
+    lr_max = 0.001
+    lr_min = 1*10**(-9)
 
 @dataclass
 class C_Step_Sch:

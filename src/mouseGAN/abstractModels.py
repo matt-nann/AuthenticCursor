@@ -111,10 +111,10 @@ class GAN(metaclass=abc.ABCMeta):
             latest_g_model = find_latest_model('g', CKPT_DIR)
             latest_d_model = find_latest_model('d', CKPT_DIR)
         if latest_g_model is not None:
-            self.generator.load_state_dict(torch.load(latest_g_model))
+            self.generator.load_state_dict(torch.load(latest_g_model, map_location=self.device))
             print(f"Loaded generator model: {latest_g_model}")
         if latest_d_model is not None:
-            self.discriminator.load_state_dict(torch.load(latest_d_model))
+            self.discriminator.load_state_dict(torch.load(latest_d_model, map_location=self.device))
             print(f"Loaded discriminator model: {latest_d_model}")
         if latest_g_model is not None and latest_d_model is not None:
             if isinstance(startingEpoch, str):

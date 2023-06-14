@@ -372,7 +372,8 @@ class MouseGAN(GAN):
         NOT comparing the final generated location to the real final location or vice versa
         """
         d_loss_dev = self.criterion_locaDev(g_finalLocations, realFinalLocations)
-        d_loss_dev = torch.log(d_loss_dev)
+        # when the d_loss_dev < 1.0 then torch.log(d_loss_dev) is negative, shifting input left by 1.0 to prevent any negative losses and rapid changes
+        d_loss_dev = torch.log(d_loss_dev + 1)
         return d_loss_dev
 
     def outsideTargetLoss(self, g_finalLocations, targetWidths, targetHeights):

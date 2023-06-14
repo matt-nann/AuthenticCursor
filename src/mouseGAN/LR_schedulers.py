@@ -30,7 +30,8 @@ class GapScheduler(LRScheduler):
     def __init__(self, optimizer, 
                 ideal_loss,
                 discLossDecay=0.95, loss_min=None, loss_max=None, 
-                lr_shrinkMin=0.1, lr_growthMax=2.0, cooldown=0
+                lr_shrinkMin=0.1, lr_growthMax=2.0, cooldown=0,
+                lr_max = 0.001, lr_min = 1*10**(-9)
                 ,verbose=False):
         self.ideal_loss = ideal_loss
         self.discLossDecay = discLossDecay
@@ -43,8 +44,8 @@ class GapScheduler(LRScheduler):
         self.scale_history = []
         self.LR_history = []
         self.step_history = []
-        self.lr_max = 0.001
-        self.lr_min = 1*10**(-9)
+        self.lr_max = lr_max
+        self.lr_min = lr_min
         self.cooldown = cooldown
 
     def get_lr(self):
