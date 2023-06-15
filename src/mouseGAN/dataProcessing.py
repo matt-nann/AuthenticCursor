@@ -417,12 +417,7 @@ class MouseGAN_Data:
                     # yaxis=dict(range=[0, 1000], autorange=False),
                                 xaxis_title='x', yaxis_title='y', width=1000, height=1000, margin=dict(l=0, r=0, b=0, t=30))
                 self.fig.show()
-
-                # display(df_target)
-                # display(df_sequence.head(3))
-            # print(df_sequence)
-            # print(df_target)
-            
+                
         # all normalization happens together but only training samples were used to calculate group statistics
         # E.G test samples are normalized with training dataset statistics
         norm_input_trajectories, norm_buttonTargets = self.normalize(self.input_trajectories, self.buttonTargets)
