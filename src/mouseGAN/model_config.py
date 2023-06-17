@@ -121,6 +121,8 @@ class Config:
     lossFunc: C_LOSS_FUNC = C_LOSS_FUNC()
     discriminator: C_Discriminator = C_Discriminator()
     generator: C_Generator = C_Generator()
+    lambda_stopLoss: float = 0.05
+    STOP_THRESHOLD:float = 0.55
 
     def __post_init__(self):
         if self.G_lr_scheduler is None:
