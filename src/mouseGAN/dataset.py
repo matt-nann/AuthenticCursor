@@ -35,7 +35,9 @@ def visuallyVertifyDataloader(dataloader, dataset, showNumBatches=1):
         if i == showNumBatches:
             break
         for ii in range(len(_input_trajectories_padded)):
-            df_sequence = pd.DataFrame(_input_trajectories_padded[ii] * dataset.std_traj + dataset.mean_traj, columns=['dx','dy'])
+            traj = _input_trajectories_padded[ii] * dataset.std_traj + dataset.mean_traj
+            traj = traj[:trajectoryLengths[ii]]
+            df_sequence = pd.DataFrame(traj, columns=['dx','dy'])
             df_sequence['velocity'] = np.sqrt(df_sequence['dx']**2 + df_sequence['dy']**2) / dataset.FIXED_TIMESTEP
             df_target = pd.DataFrame(_buttonTargets[ii] * dataset.std_button + dataset.mean_button, columns=[dataset.targetColumns])
             sequence_id = 0

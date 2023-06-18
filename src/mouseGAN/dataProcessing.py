@@ -5,6 +5,7 @@ import matplotlib
 import matplotlib.colors as colors
 import torch
 import pickle
+from multiprocessing import Pool, cpu_count
 
 sqrt3 = np.sqrt(3)
 sqrt5 = np.sqrt(5)
@@ -62,6 +63,56 @@ def wind_mouse(start_x, start_y, dest_x, dest_y, G_0=9, W_0=3, M_0=20, D_0=12, m
             offsets.append((current_x, current_y))
             current_x, current_y = move_x, move_y
     return total_steps, total_pixel_distance, offsets
+
+def weighted_avg_and_std(values, weights):
+    average = np.average(values, weights=weights, axis=0) # Calculate average for each column separately
+    variance = np.average((values-average)**2, weights=weights, axis=0)  # Fast and numerically precise
+    return (average, np.sqrt(variance))
+
+def process_trajectory_data(args):
+    trajectory, trajColumns = args
+    # check if first rows of f_trajectory are duplicates
+    if trajectory.iloc[0].equals(trajectory.iloc[1]):
+        trajectory = trajectory.iloc[1:].copy()
+    trajectory['dx'] = trajectory['raw_x'].diff(1)
+    trajectory['dy'] = trajectory['raw_y'].diff(1)
+    trajectory['dx'].iloc[0] = 0
+    trajectory['dy'].iloc[0] = 0
+    # keeping the first row but setting all the movements columns to zero
+    trajectory.reset_index(inplace=True, drop=True)
+    for col in ['velocity','distance','dx','dy','timeDelta']:
+        trajectory.at[0, col] = 0
+    # df_cleanedSeq = self.remove_consecutive_zero_velocity_rows(f_trajectory)
+    trajectory = trajectory[trajColumns]
+    traj_mean_std = weighted_avg_and_std(trajectory.values, np.ones(len(trajectory)))
+    return trajectory, traj_mean_std
+
+def process_trajectory_data_equal_length(args):
+    trajectory, buttonTarget, lowerLimit, trajColumns = args
+    # check if first rows of f_trajectory are duplicates
+    if trajectory.iloc[0].equals(trajectory.iloc[1]):
+        trajectory = trajectory.iloc[1:].copy()
+    if len(trajectory) < lowerLimit:
+        return None
+    trajectory = trajectory.iloc[-lowerLimit:].copy()
+    new_start_x, new_start_y = trajectory['raw_x'].iloc[0], trajectory['raw_y'].iloc[0]
+    end_x, end_y = trajectory['raw_x'].iloc[-1], trajectory['raw_y'].iloc[-1]
+    buttonTarget['start_x'] = new_start_x
+    buttonTarget['start_y'] = new_start_y
+    buttonTarget['end_x'] = end_x
+    buttonTarget['end_y'] = end_y
+    trajectory['dx'] = trajectory['raw_x'].diff(1)
+    trajectory['dy'] = trajectory['raw_y'].diff(1)
+    trajectory['dx'].iloc[0] = 0
+    trajectory['dy'].iloc[0] = 0
+    # keeping the first row but setting all the movements columns to zero
+    trajectory.reset_index(inplace=True, drop=True)
+    for col in ['velocity','distance','dx','dy','timeDelta']:
+        trajectory.at[0, col] = 0
+    # df_cleanedSeq = self.remove_consecutive_zero_velocity_rows(f_trajectory)
+    trajectory = trajectory[trajColumns]
+    traj_mean_std = weighted_avg_and_std(trajectory.values, np.ones(len(trajectory)))
+    return trajectory, buttonTarget, traj_mean_std
 
 class MouseGAN_Data:
     dataLocal = 'data/local'
@@ -283,48 +334,61 @@ class MouseGAN_Data:
         df_abs['x'] = (df_abs['temp_x'] ).cumsum(False)
         df_abs['y'] = (df_abs['temp_y'] ).cumsum(False)
         return df_abs
-    
-    def processFakeData(self, samples, percentPrint):
-        # raw_x	raw_y velocity
-        # width	height	start_x	start_y
-        counter = 0
+
+    def processFakeData(self, samples, percentPrint, seed=None):
+        """
+        TODO update
+        standard deviations differ between the weighted method, which considers trajectory lengths, and the traditional method, which treats all points equally. 
+        In the weighted approach, longer trajectories with lower or higher standard deviations affect the final result more than shorter ones.
+        In the traditional approach, shorter trajectories with high standard deviations may have a larger impact. 
+        The choice depends on whether you want each trajectory's influence to be proportional to its length (weighted) or each point to have equal impact (traditional)
+        """
+        # randomly selecting the indexes for train vs test
         if samples is None or samples > len(self.fake_trajectories):
-            sampleIndexes = range(len(self.fake_trajectories))
+            sampleIndexes = np.arange(len(self.fake_trajectories))
+            np.random.shuffle(sampleIndexes)
         else:
             sampleIndexes = np.random.choice(len(self.fake_trajectories), samples, replace=False)
-        totalRecords = len(sampleIndexes)
-        for i in sampleIndexes:
-            trajectory = self.fake_trajectories[i]
-            buttonTarget = self.fake_buttonTargets[i]
-            f_trajectory = trajectory.copy()
-            # check if first rows of f_trajectory are duplicates
-            if f_trajectory.iloc[0].equals(f_trajectory.iloc[1]):
-                f_trajectory = f_trajectory.iloc[1:].copy()
+        totalSamples = len(sampleIndexes)
+        parallel_args = []
+        for i_sample in sampleIndexes:
+            trajectory = self.fake_trajectories[i_sample]
+            buttonTarget = self.fake_buttonTargets[i_sample]
             if self.equal_length:
-                if len(f_trajectory) < self.lowerLimit:
-                    continue
-                f_trajectory = f_trajectory.iloc[-self.lowerLimit:].copy()
-                new_start_x, new_start_y = f_trajectory['raw_x'].iloc[0], f_trajectory['raw_y'].iloc[0]
-                end_x, end_y = f_trajectory['raw_x'].iloc[-1], f_trajectory['raw_y'].iloc[-1]
-                buttonTarget['start_x'] = new_start_x
-                buttonTarget['start_y'] = new_start_y
-                buttonTarget['end_x'] = end_x
-                buttonTarget['end_y'] = end_y
-            f_trajectory['dx'] = f_trajectory['raw_x'].diff(1)
-            f_trajectory['dy'] = f_trajectory['raw_y'].diff(1)
-            f_trajectory['dx'].iloc[0] = 0
-            f_trajectory['dy'].iloc[0] = 0
-            # keeping the first row but setting all the movements columns to zero
-            f_trajectory.reset_index(inplace=True, drop=True)
-            for col in ['velocity','distance','dx','dy','timeDelta']:
-                f_trajectory.at[0, col] = 0
-            # df_cleanedSeq = self.remove_consecutive_zero_velocity_rows(f_trajectory)
-            f_trajectory = f_trajectory[self.trajColumns]
-            self.saveTrajData(i, totalRecords, f_trajectory, buttonTarget)
-            counter += 1
-            if counter % int(len(self.fake_trajectories)*percentPrint) == 0:
-                print('processed fake data: ', counter, '/', len(self.fake_trajectories), end='\r')
-        print()
+                parallel_args.append((trajectory, buttonTarget, self.lowerLimit, self.trajColumns))
+            else:
+                parallel_args.append((trajectory, self.trajColumns))
+        with Pool(4 if cpu_count() >= 4 else cpu_count()) as p:
+            if self.equal_length:
+                results = p.map(process_trajectory_data_equal_length, parallel_args)
+            else:
+                results = p.map(process_trajectory_data, parallel_args)
+        numTrainSamples = int(self.TRAIN_TEST_SPLIT * totalSamples)
+        buttonValues = np.empty((numTrainSamples, len(self.targetColumns)))
+        all_traj_mean_std = np.empty((numTrainSamples, len(self.trajColumns), 2))
+        weights = np.empty((numTrainSamples))
+        i_statistic = 0
+        for i_result, i_sample in enumerate(sampleIndexes):
+            result = results[i_result]
+            if self.equal_length:
+                self.input_trajectories.append(result[0][self.trajColumns].values)
+                self.buttonTargets.append(result[1][self.targetColumns].values)
+                traj_mean_std = result[2]
+            else:
+                self.input_trajectories.append(result[0][self.trajColumns].values)
+                self.buttonTargets.append(self.fake_buttonTargets[i_sample][self.targetColumns].values)
+                traj_mean_std = result[1]
+            if i_result < numTrainSamples:
+                buttonValues[i_statistic] = self.buttonTargets[-1]
+                all_traj_mean_std[i_statistic,:,0] =  traj_mean_std[0]
+                all_traj_mean_std[i_statistic,:,1] = traj_mean_std[1]
+                weights[i_statistic] = self.input_trajectories[-1].shape[0]
+                i_statistic += 1
+        
+        self.mean_button = buttonValues.mean(axis=0)
+        self.std_button = buttonValues.std(axis=0)
+        self.mean_traj = np.average(all_traj_mean_std[:,:,0], weights=weights, axis=0)
+        self.std_traj = np.average(all_traj_mean_std[:,:,1], weights=weights, axis=0)
 
     def processMouseData(self, SHOW_ALL=False, SHOW_ONE=False, num_sequences=10, samples=None):
         """
@@ -334,14 +398,14 @@ class MouseGAN_Data:
         self.shapes, self.list_of_all_arrows = [], []
         self.SHOW_ALL = SHOW_ALL
         self.SHOW_ONE = SHOW_ONE
-        self.trajectoryValues = [[] for i in range(len(self.trajColumns))]
-        self.targetValues = [[] for i in range(len(self.targetColumns))]
         self.input_trajectories = []
         self.buttonTargets = []
         percentPrint = 0.1
         if self.USE_FAKE_DATA:
             self.processFakeData(samples, percentPrint)
         else:
+            self.trajectoryValues = [[] for i in range(len(self.trajColumns))]
+            self.targetValues = [[] for i in range(len(self.targetColumns))]
             counter = 0
             # filter out some they are roughly all the same length to start
             if self.equal_length:
@@ -417,6 +481,7 @@ class MouseGAN_Data:
                     # yaxis=dict(range=[0, 1000], autorange=False),
                                 xaxis_title='x', yaxis_title='y', width=1000, height=1000, margin=dict(l=0, r=0, b=0, t=30))
                 self.fig.show()
+            self._calcDistributionMetrics()
                 
         # all normalization happens together but only training samples were used to calculate group statistics
         # E.G test samples are normalized with training dataset statistics
@@ -436,9 +501,12 @@ class MouseGAN_Data:
         self.std_traj = self.trajectoryValues.std(axis=1)
         self.mean_button = self.targetValues.mean(axis=1)
         self.std_button = self.targetValues.std(axis=1)
+        print("mean_traj: ", self.mean_traj)
+        print("std_traj: ", self.std_traj)
+        print("mean_button: ", self.mean_button)
+        print("std_button: ", self.std_button)
 
     def normalize(self, input_trajectories, buttonTargets):
-        self._calcDistributionMetrics()
         norm_input_trajectories = []
         norm_buttonTargets = []
         for i in range(len(input_trajectories)):

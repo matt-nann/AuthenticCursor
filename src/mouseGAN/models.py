@@ -82,8 +82,8 @@ class Generator(GeneratorBase):
                 torch.manual_seed(seed)
                 if self.device.type == 'cuda':
                     torch.cuda.manual_seed(seed)
-            z = torch.randn([batch_size, self.config.latent_dim]).to(self.device)
-            z = z / z.norm(dim=-1, keepdim=True).to(self.device)
+            z = torch.randn([batch_size, self.config.latent_dim], device=self.device)
+            z = z / z.norm(dim=-1, keepdim=True)
         return z
         """
         BATCH_SIZE = 10000000
@@ -95,7 +95,7 @@ class Generator(GeneratorBase):
         """
     def forward(self, z, buttonTarget, states):
         batch_size, latent_dim = z.shape
-        prev_gen = torch.zeros([batch_size, self.config.num_feats]).uniform_().to(self.device)
+        prev_gen = torch.zeros([batch_size, self.config.num_feats], device=self.device).uniform_()
         state = states  # List of LSTM hidden states
         gen_feats = []
         stop_tokens = []
@@ -130,8 +130,8 @@ class Generator(GeneratorBase):
         weight = next(self.parameters()).data
         hidden = []
         for _ in range(self.num_lstm_layers):
-            h = weight.new(batch_size, self.hidden_units).zero_().to(self.device)
-            c = weight.new(batch_size, self.hidden_units).zero_().to(self.device)
+            h = weight.new(batch_size, self.hidden_units).zero_(device=self.device)
+            c = weight.new(batch_size, self.hidden_units).zero_(device=self.device)
             hidden.append((h, c))
         return hidden
 
@@ -174,7 +174,7 @@ class Discriminator(DiscriminatorBase):
         keepAll = torch.sum(mask, dim=1) == mask.shape[1] 
         min_indices = torch.argmin(mask, dim=1) + 1
         min_indices[keepAll] = mask.shape[1]
-        range_tensor = torch.arange(stop_tokens.shape[1]).expand(stop_tokens.shape[0], -1).to(stop_tokens.device)
+        range_tensor = torch.arange(stop_tokens.shape[1], device=stop_tokens.device).expand(stop_tokens.shape[0], -1)
         mask = (range_tensor < min_indices.unsqueeze(-1)).float()
         return mask
 
@@ -214,9 +214,9 @@ class Discriminator(DiscriminatorBase):
         weight = next(self.parameters()).data
         layer_mult = 2 if self.lstm.bidirectional else 1
         hidden = (weight.new(self.num_layers * layer_mult, batch_size,
-                                self.hidden_units).zero_().to(self.device),
+                                self.hidden_units).zero_(device=self.device),
                     weight.new(self.num_layers * layer_mult, batch_size,
-                                self.hidden_units).zero_().to(self.device))
+                                self.hidden_units).zero_(device=self.device))
         return hidden
 
 class MouseGAN(GAN):
@@ -240,10 +240,10 @@ class MouseGAN(GAN):
         self.trainBatches = len(trainLoader)
         self.testLoader = testLoader
         self.testBatches = len(testLoader)
-        self.std_traj = torch.Tensor(dataset.std_traj).to(device)
-        self.std_button = torch.Tensor(dataset.std_button).to(device)
-        self.mean_traj = torch.Tensor(dataset.mean_traj).to(device)
-        self.mean_button = torch.Tensor(dataset.mean_button).to(device)
+        self.std_traj = torch.Tensor(dataset.std_traj, device=device)
+        self.std_button = torch.Tensor(dataset.std_button, device=device)
+        self.mean_traj = torch.Tensor(dataset.mean_traj, device=device)
+        self.mean_button = torch.Tensor(dataset.mean_button, device=device)
         if (c.discriminator.useEndDeviationLoss or c.generator.useOutsideTargetLoss):
             self.locationMSELoss = c.locationMSELoss
             self.criterion_locaDev = nn.MSELoss() if c.locationMSELoss else nn.L1Loss()
@@ -380,13 +380,13 @@ class MouseGAN(GAN):
         """
         assert real_samples.shape == fake_samples.shape
         # Random weight term for interpolation between real and fake samples
-        alpha = torch.rand((real_samples.size(0), 1, 1)).to(self.device).requires_grad_(False)
+        alpha = torch.rand((real_samples.size(0), 1, 1), device=self.device).requires_grad_(False)
         # Get random interpolation between real and fake samples
         interpolated = alpha * real_samples + (1 - alpha) * fake_samples
         # calculate probability of interpolated examples
         with torch.backends.cudnn.flags(enabled=False):
             score_interpolated, _ = self.discriminator(interpolated, buttonTargets, d_state)
-        ones = torch.ones(score_interpolated.size()).to(self.device).requires_grad_(True)
+        ones = torch.ones(score_interpolated.size(), device=self.device).requires_grad_(True)
         gradients = torch.autograd.grad(
             outputs=score_interpolated,
             inputs=interpolated,
@@ -506,6 +506,7 @@ class MouseGAN(GAN):
     
     def prepare_batch(self, dataTuple):
         mouse_trajectories, normButtonLocs, real_lengths = dataTuple
+        real_lengths = real_lengths.to(self.device)
         mouse_trajectories = mouse_trajectories.to(self.device)
         normButtonLocs = normButtonLocs.to(self.device).squeeze(1)
         normButtons = normButtonLocs[:, :4]
