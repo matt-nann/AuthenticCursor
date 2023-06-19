@@ -501,51 +501,67 @@ class MouseGAN(GAN):
             d_logits_gen, _ = self.discriminator(fake_traj, normButtons, fake_stop_tokens, d_states)
             d_logits_gen = d_logits_gen.view(-1)
             g_loss = self.criterionMSE(d_logits_gen, torch.ones_like(d_logits_gen))
+            if not validation:
+                self.optimizer_G.zero_grad()
+                g_loss.backward(retain_graph=True)
+                self.optimizer_G.step()
         else:
             raise ValueError("Invalid loss function")
         
-        with torch.no_grad():
-            fake_lengths = torch.argmin((fake_stop_tokens < self.c.STOP_THRESHOLD).float(), dim=1)
-            fake_lengths = torch.where((fake_lengths == 0) & (fake_stop_tokens[:,-1] < self.c.STOP_THRESHOLD), fake_stop_tokens.shape[1], fake_lengths).float()
-            g_stop_token_loss_length = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
-            if self.c.generator.useIndividualStopTokenLoss:
-                max_seq_len = max(real_stop_tokens.shape[1], fake_stop_tokens.shape[1])
-                if real_stop_tokens.shape[1] < fake_stop_tokens.shape[1]:  # pad real to match fake length
-                    real_stop_tokens = F.pad(real_stop_tokens, (0, max_seq_len - real_stop_tokens.shape[1]), "constant", 1).float()                   
-                elif real_stop_tokens.shape[1] > fake_stop_tokens.shape[1]: # pad fake to match real length
-                    fake_stop_tokens = F.pad(fake_stop_tokens, (0, max_seq_len - fake_stop_tokens.shape[1]), "constant", 1).float()
-                mask = self.discriminator.computeMask(fake_stop_tokens) # mask is for zeroing out any input that is after the stop
-                _fake_stop_tokens = torch.ones_like(fake_stop_tokens)
-                fake_stop_tokens *= mask
-                fake_stop_tokens = torch.where(fake_stop_tokens == 0, _fake_stop_tokens, fake_stop_tokens) # need to set the masked area to 1 signaling the stops
-                fake_stop_tokens = fake_stop_tokens.float()
-                real_stop_tokens = real_stop_tokens.float()
-                try:
-                    g_stop_token_loss_stops = F.cross_entropy(fake_stop_tokens, real_stop_tokens)
-                except:
-                    print("fake_stop_tokens.dtype: ", fake_stop_tokens.dtype, "real_stop_tokens.dtype: ", real_stop_tokens.dtype)
-                    print("fake_stop_tokens", fake_stop_tokens)
-                    print("real_stop_tokens", real_stop_tokens)
-                    print("_fake_stop_tokens", _fake_stop_tokens)
-                    print("mask", mask)
-                    raise
-                g_stop_token_loss = (g_stop_token_loss_length + g_stop_token_loss_stops) / 2
-                self.batchMetrics["g_stop_token_loss_stops" + post] = g_stop_token_loss_stops.item()
-                # print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
-            else:
-                g_stop_token_loss = g_stop_token_loss_length
-                # print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
-            self.batchMetrics["g_stop_token_loss" + post] = g_stop_token_loss.item()
-            self.batchMetrics["g_stop_token_loss_length" + post] = g_stop_token_loss_length.item()
-            g_loss += self.c.lambda_stopLoss * g_stop_token_loss
+        # with torch.no_grad():
+        fake_lengths = torch.argmin((fake_stop_tokens < self.c.STOP_THRESHOLD).float(), dim=1)
+        fake_lengths = torch.where((fake_lengths == 0) & (fake_stop_tokens[:,-1] < self.c.STOP_THRESHOLD), fake_stop_tokens.shape[1], fake_lengths).float().requires_grad_(True)
+        g_stop_token_loss_length = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
+        if not validation:
+            self.optimizer_G.zero_grad()
+            g_stop_token_loss_length.backward(retain_graph=True)
+            self.optimizer_G.step()
+        if self.c.generator.useIndividualStopTokenLoss:
+            max_seq_len = max(real_stop_tokens.shape[1], fake_stop_tokens.shape[1])
+            if real_stop_tokens.shape[1] < fake_stop_tokens.shape[1]:  # pad real to match fake length
+                real_stop_tokens = F.pad(real_stop_tokens, (0, max_seq_len - real_stop_tokens.shape[1]), "constant", 1).float()                   
+            elif real_stop_tokens.shape[1] > fake_stop_tokens.shape[1]: # pad fake to match real length
+                fake_stop_tokens = F.pad(fake_stop_tokens, (0, max_seq_len - fake_stop_tokens.shape[1]), "constant", 1).float()
+            mask = self.discriminator.computeMask(fake_stop_tokens) # mask is for zeroing out any input that is after the stop
+            _fake_stop_tokens = torch.ones_like(fake_stop_tokens)
+            fake_stop_tokens *= mask
+            fake_stop_tokens = torch.where(fake_stop_tokens == 0, _fake_stop_tokens, fake_stop_tokens) # need to set the masked area to 1 signaling the stops
+            fake_stop_tokens = fake_stop_tokens.float()
+            real_stop_tokens = real_stop_tokens.float()
+            try:
+                g_stop_token_loss_stops = F.cross_entropy(fake_stop_tokens, real_stop_tokens)
+            except:
+                print("fake_stop_tokens.dtype: ", fake_stop_tokens.dtype, "real_stop_tokens.dtype: ", real_stop_tokens.dtype)
+                print("fake_stop_tokens", fake_stop_tokens)
+                print("real_stop_tokens", real_stop_tokens)
+                print("_fake_stop_tokens", _fake_stop_tokens)
+                print("mask", mask)
+                raise
+            if not validation:
+                self.optimizer_G.zero_grad()
+                g_stop_token_loss_stops.backward(retain_graph=True)
+                self.optimizer_G.step()
+            g_stop_token_loss = (g_stop_token_loss_length + g_stop_token_loss_stops) / 2
+            self.batchMetrics["g_stop_token_loss_stops" + post] = g_stop_token_loss_stops.item()
+            # print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
+        else:
+            g_stop_token_loss = g_stop_token_loss_length
+            # print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
+        self.batchMetrics["g_stop_token_loss" + post] = g_stop_token_loss.item()
+        self.batchMetrics["g_stop_token_loss_length" + post] = g_stop_token_loss_length.item()
+        g_loss += self.c.lambda_stopLoss * g_stop_token_loss
 
-            # additional loss components
-            if self.c.generator.useOutsideTargetLoss:
-                g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
-                g_loss_missed = self.outsideTargetLoss(g_finalLocations, targetWidths, targetHeights)
-                g_loss += g_loss_missed
-                self.batchMetrics["g_loss_missed" + post] = g_loss_missed.item()
-            self.batchMetrics["g_loss" + post] = g_loss.item()
+        # additional loss components
+        if self.c.generator.useOutsideTargetLoss:
+            g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
+            g_loss_missed = self.outsideTargetLoss(g_finalLocations, targetWidths, targetHeights)
+            if not validation:
+                self.optimizer_G.zero_grad()
+                g_loss_missed.backward(retain_graph=False)
+                self.optimizer_G.step()
+            g_loss += g_loss_missed
+            self.batchMetrics["g_loss_missed" + post] = g_loss_missed.item()
+        self.batchMetrics["g_loss" + post] = g_loss.item()
         return g_loss
     
     def prepare_batch(self, dataTuple):
@@ -580,12 +596,12 @@ class MouseGAN(GAN):
             self.optimizer_D.step() # perform updates using calculated gradients
         g_states = self.generator.init_hidden(_batch_size)
         d_states = self.discriminator.init_hidden(_batch_size)
-        g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
+        g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states, validation=not is_training)
 
-        if is_training:
-            self.optimizer_G.zero_grad()
-            g_loss.backward()
-            self.optimizer_G.step()
+        # if is_training:
+        #     self.optimizer_G.zero_grad()
+        #     g_loss.backward()
+        #     self.optimizer_G.step()
         if is_training:
             return d_loss, d_loss_base, g_loss
         else:
@@ -646,7 +662,6 @@ class MouseGAN(GAN):
             self.epoch_metrics['val_g_loss'] = val_g_loss_total / self.testBatches
 
     def train_epoch(self, epoch):
-        print("epoch: ", torch.cuda.memory_allocated())
         with torch.autograd.set_detect_anomaly(True):
             self.generator.train()
             self.discriminator.train()

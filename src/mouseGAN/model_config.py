@@ -131,6 +131,7 @@ class Config:
 
     def __post_init__(self):
         if self.G_lr_scheduler is None:
-            self.G_lr_scheduler = C_EMA_Plateua_Sch(patience=self.BATCH_SIZE, cooldown=int(self.BATCH_SIZE/8))
+            # self.G_lr_scheduler = C_EMA_Plateua_Sch(patience=self.BATCH_SIZE, cooldown=int(self.BATCH_SIZE/8))
+            self.G_lr_scheduler = None
         if self.D_lr_scheduler is None:
             self.D_lr_scheduler = C_LossGap_Sch(cooldown=int(self.BATCH_SIZE/8))
