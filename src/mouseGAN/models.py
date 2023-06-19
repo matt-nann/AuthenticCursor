@@ -13,7 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-
+from torch.cuda.amp import GradScaler, autocast
+from torch.nn.utils import clip_grad_norm_, clip_grad_value_, clip_grad_norm
 
 from .model_config import LOSS_FUNC, LR_SCHEDULERS, Config
 from .dataProcessing import MouseGAN_Data
@@ -68,16 +69,16 @@ class Generator(GeneratorBase):
         self.device = device
         self.MAX_SEQ_LEN = config.MAX_SEQ_LEN
         self.hidden_units = c_g.hidden_units
-        self.fc_layer1 = nn.Linear(in_features=(self.config.latent_dim + config.num_feats + config.num_target_feats), out_features=c_g.hidden_units)
+        self.fc_input_g = nn.Linear(in_features=(self.config.latent_dim + config.num_feats + config.num_target_feats), out_features=c_g.hidden_units)
         # Use a list to manage all LSTM cells
-        self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units) for _ in range(self.num_lstm_layers)])
+        self.lstm_cells_g = nn.ModuleList([nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units) for _ in range(self.num_lstm_layers)])
         # TODO why does layer normalization work
         if c_g.layer_normalization:
-            self.layer_norms = nn.ModuleList([nn.LayerNorm(c_g.hidden_units) for _ in range(self.num_lstm_layers)])
+            self.layer_norms_g = nn.ModuleList([nn.LayerNorm(c_g.hidden_units) for _ in range(self.num_lstm_layers)])
         self.leaky_relu = nn.LeakyReLU(.2)
         self.dropout = nn.Dropout(p=c_g.drop_prob)
-        self.fc_layer2 = nn.Linear(in_features=c_g.hidden_units, out_features=config.num_feats)
-        self.fc_stop_token = nn.Linear(in_features=c_g.hidden_units, out_features=1) # predicting the stop token
+        self.fc_output_g = nn.Linear(in_features=c_g.hidden_units, out_features=config.num_feats)
+        self.fc_stop_token_g = nn.Linear(in_features=c_g.hidden_units, out_features=1) # predicting the stop token
         for m in self.modules():
             init_weights(m)
     
@@ -113,21 +114,21 @@ class Generator(GeneratorBase):
         for i in range(self.MAX_SEQ_LEN):
             # concatenate current input features and previous timestep output features, and buttonTarget every sequence step
             concat_in = torch.cat((z, prev_gen, buttonTarget), dim=-1)
-            out = self.leaky_relu(self.fc_layer1(concat_in))
+            out = self.leaky_relu(self.fc_input_g(concat_in))
             # Pass through each LSTM cell
             for j in range(self.num_lstm_layers):
-                hidden, cell = self.lstm_cells[j](out if j == 0 else state[j-1][0], state[j])  # Pass the output from the previous layer or the input for the first layer
+                hidden, cell = self.lstm_cells_g[j](out if j == 0 else state[j-1][0], state[j])  # Pass the output from the previous layer or the input for the first layer
                 if self.c_g.layer_normalization:
-                    hidden = self.layer_norms[j](hidden)  # Apply layer normalization
+                    hidden = self.layer_norms_g[j](hidden)  # Apply layer normalization
                 hidden = self.dropout(hidden)  # Apply dropout to the hidden state
                 state[j] = (hidden, cell)
                 if self.c_g.residual_connections: # add the residual connection
                     if j > 0: # add the residual connection
                         state[j] = (state[j][0] + hidden_states[-1], state[j][1])
                     hidden_states.append(state[j][0])
-            stop_tokens.append(self.fc_stop_token(state[-1][0]))  # Predict stop token
+            stop_tokens.append(self.fc_stop_token_g(state[-1][0]))  # Predict stop token
             sequenceStopped = torch.logical_or(sequenceStopped, stop_tokens[-1] >= self.config.STOP_THRESHOLD)
-            gen_feats.append(self.fc_layer2(state[-1][0])) # The output from the final LSTM layer
+            gen_feats.append(self.fc_output_g(state[-1][0])) # The output from the final LSTM layer
             if torch.all(sequenceStopped): # stopping sequence generation if sequences stopped
                 break
         # import plotly.graph_objects as go
@@ -167,21 +168,21 @@ class Discriminator(DiscriminatorBase):
         lstm_input_dim = config.num_feats + config.num_target_feats
 
         if self.useMiniBatchDisc:
-            self.miniBatch = MinibatchDiscrimination(self.miniBatchDisc, lstm_input_dim)
+            self.miniBatch_d = MinibatchDiscrimination(self.miniBatchDisc, lstm_input_dim)
             lstm_input_dim += self.miniBatchDisc.num_kernels
         # NOTE not using dropout because the number of input features is so small
-        self.lstm = nn.LSTM(input_size=lstm_input_dim, hidden_size=self.hidden_units,
+        self.lstm_d = nn.LSTM(input_size=lstm_input_dim, hidden_size=self.hidden_units,
                             num_layers=c_d.num_lstm_layers, batch_first=True, bidirectional=c_d.bidirectional)
         self.num_lstm_output_feats = 2 * self.hidden_units if c_d.bidirectional else self.hidden_units
-        self.score_layer = nn.Linear(in_features=(self.num_lstm_output_feats), out_features=1)
+        self.score_layer_d = nn.Linear(in_features=(self.num_lstm_output_feats), out_features=1)
         # Spectral Normalization operates by normalizing the weights of the neural network layer using the spectral norm, 
         # which is the maximum singular value of the weights matrix. This normalization technique ensures Lipschitz continuity 
         # and controls the Lipschitz constant of the function represented by the neural network, which is important for the stability of GANs. 
         # This is especially critical in the discriminator network of GANs, where controlling the Lipschitz constant can prevent mode collapse 
         # and help to produce higher quality generated samples.
-        self.score_layer = torch.nn.utils.spectral_norm(self.score_layer)
+        self.score_layer_d = torch.nn.utils.spectral_norm(self.score_layer_d)
         if self.useEndDeviationLoss:
-            self.endLoc_layer = nn.Linear(in_features=(self.num_lstm_output_feats), out_features=2)
+            self.endLoc_layer_d = nn.Linear(in_features=(self.num_lstm_output_feats), out_features=2)
         for m in self.modules():
             init_weights(m)
 
@@ -199,14 +200,14 @@ class Discriminator(DiscriminatorBase):
         mask = self.computeMask(stop_tokens)
         input_feats = input_feats * mask.unsqueeze(-1)
         if self.miniBatchDisc:
-            x = self.miniBatch(input_feats)
+            x = self.miniBatch_d(input_feats)
         else:
             x = input_feats
-        lstm_out, state = self.lstm(x, state)
-        score = self.score_layer(lstm_out)
+        lstm_out, state = self.lstm_d(x, state)
+        score = self.score_layer_d(lstm_out)
         endLocation = None
         if self.useEndDeviationLoss:
-            if self.lstm.bidirectional:
+            if self.lstm_d.bidirectional:
                 """ The LSTM output contains the hidden states at each sequence step. 
                 The forward pass's last hidden state is at the end of the sequence (index -1), 
                 while the backward pass's last hidden state is at the beginning (index 0). However, each of these are still full-sized hidden states. """
@@ -216,7 +217,7 @@ class Discriminator(DiscriminatorBase):
                 lstm_out = torch.cat((forward_hidden, backward_hidden), dim=-1)
             else:
                 lstm_out = lstm_out[:, -1, :]
-            endLocation = self.endLoc_layer(lstm_out)
+            endLocation = self.endLoc_layer_d(lstm_out)
         """ the discriminator analyzes sequential data, providing a score for each time step. 
         By not using the last time step's output, a more comprehensive representation of 
         the entire sequence is obtained thus avoiding information loss. """
@@ -228,7 +229,7 @@ class Discriminator(DiscriminatorBase):
     def init_hidden(self, batch_size):
         ''' Initialize hidden state '''
         weight = next(self.parameters()).data
-        layer_mult = 2 if self.lstm.bidirectional else 1
+        layer_mult = 2 if self.lstm_d.bidirectional else 1
         hidden = (weight.new(self.num_layers * layer_mult, batch_size,
                                 self.hidden_units, device=self.device).zero_(),
                     weight.new(self.num_layers * layer_mult, batch_size,
@@ -256,10 +257,10 @@ class MouseGAN(GAN):
         self.trainBatches = len(trainLoader)
         self.testLoader = testLoader
         self.testBatches = len(testLoader)
-        self.std_traj = torch.Tensor(dataset.std_traj, device=device)
-        self.std_button = torch.Tensor(dataset.std_button, device=device)
-        self.mean_traj = torch.Tensor(dataset.mean_traj, device=device)
-        self.mean_button = torch.Tensor(dataset.mean_button, device=device)
+        self.std_traj = torch.Tensor(dataset.std_traj).to(device)
+        self.std_button = torch.Tensor(dataset.std_button).to(device)
+        self.mean_traj = torch.Tensor(dataset.mean_traj).to(device)
+        self.mean_button = torch.Tensor(dataset.mean_button).to(device)
         if (c.discriminator.useEndDeviationLoss or c.generator.useOutsideTargetLoss):
             self.locationMSELoss = c.locationMSELoss
             self.criterion_locaDev = nn.MSELoss() if c.locationMSELoss else nn.L1Loss()
@@ -267,8 +268,29 @@ class MouseGAN(GAN):
         self.criterionMSE = nn.MSELoss()
         self.criterionMAE = nn.L1Loss()
 
+        self.gradientScaler = GradScaler() # gradient scaling, multiple small grad
+
         generator = Generator(device, c).to(device)
         discriminator = Discriminator(device, c).to(device)
+
+        """
+        Gradient clipping by norm prevents the gradient norm from exceeding a certain threshold, hence preserving the direction of the gradients while scaling down their magnitude. 
+        two ways:
+            1) DURING backpropagation: recommended as unhealthy gradients are clipped at each layer before propagating to the next layer. Preventing a snowball effect.
+            2) AFTER backpropagation: NOT recommended because "unhealthy" large gradients might have already propagated through the network.
+                If the gradients of all layers saturate at the threshold (clip) value this might prevent convergence. Early unhealthy gradients cascade across the network making more gradients getting clipped.
+        https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
+        """
+        def hook_clip_grad_norm_(grad):
+            # clip_grad_norm_ is in place so can't create a lambda function
+            clip_grad_norm_(grad, c.discriminator.gradient_maxNorm)
+            return grad
+        if c.discriminator.gradient_maxNorm is not None:
+            for p in discriminator.parameters():
+                p.register_hook(hook_clip_grad_norm_)
+        if c.generator.gradient_maxNorm is not None: 
+            for p in generator.parameters():
+                p.register_hook(hook_clip_grad_norm_)
 
         super().__init__(generator, discriminator)
 
@@ -507,8 +529,7 @@ class MouseGAN(GAN):
         self.batchMetrics["g_stop_token_loss" + post] = g_stop_token_loss.item()
         self.batchMetrics["g_stop_token_loss_length" + post] = g_stop_token_loss_length.item()
         self.batchMetrics["g_stop_token_loss_stops" + post] = g_stop_token_loss_stops.item()
-        # print("g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_loss", g_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
-        # print("g_stop_token_loss", g_stop_token_loss.item(), "g_loss", g_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
+        print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
         g_loss += self.c.lambda_stopLoss * g_stop_token_loss
 
         # additional loss components
@@ -538,27 +559,33 @@ class MouseGAN(GAN):
         d_states = self.discriminator.init_hidden(_batch_size)
 
         z = self.generator.generate_noise(_batch_size)
-        _max_seq_len = real_stop_tokens.shape[1]
-        fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
+        with autocast(): # using mixed precision calculations if CUDA enabled, SPEED-UP
+            fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
 
-        d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
-        d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
+            d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
+            d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
 
-        d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+            d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
                                                 mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
         if is_training:
             self.optimizer_D.zero_grad()  # clear previous gradients
-            d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
-            self.optimizer_D.step() # perform updates using calculated gradients
+            self.gradientScaler.scale(d_loss).backward() # compute gradients of all variables wrt loss
+            self.gradientScaler.unscale_(self.optimizer_D) # unscale the gradients of optimizer's assigned params in-place
+            self.gradientScaler.step(self.optimizer_D) # scaler performs the updates using the optimizer's assigned params
 
         g_states = self.generator.init_hidden(_batch_size)
         d_states = self.discriminator.init_hidden(_batch_size)
-        g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
+        with autocast():
+            g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
 
         if is_training:
             self.optimizer_G.zero_grad()
-            g_loss.backward()
-            self.optimizer_G.step()
+            self.gradientScaler.scale(g_loss).backward()
+            self.gradientScaler.unscale_(self.optimizer_G)
+            self.gradientScaler.step(self.optimizer_G)
+
+            self.gradientScaler.update()
+
         if is_training:
             return d_loss, d_loss_base, g_loss
         else:

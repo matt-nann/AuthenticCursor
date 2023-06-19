@@ -98,6 +98,7 @@ class C_Discriminator:
     bidirectional: bool = False 
     miniBatchDisc: Optional[C_MiniBatchDisc] = C_MiniBatchDisc()
     useEndDeviationLoss: bool = False
+    gradient_maxNorm : Optional[float] = None
     
 @dataclass
 class C_Generator:
@@ -108,6 +109,7 @@ class C_Generator:
     drop_prob: float = 0.1
     layer_normalization: bool = True
     residual_connections: bool = True
+    gradient_maxNorm : Optional[float] = None
 
 @dataclass
 class Config:
