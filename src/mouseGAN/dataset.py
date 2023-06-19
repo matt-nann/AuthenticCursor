@@ -52,12 +52,12 @@ def visuallyVertifyDataloader(dataloader, dataset, showNumBatches=1):
                         # symbol= "arrow-bar-up", angleref="previous",
                         # size=15,
                         # color='grey',),
-                        color=df_abs['velocity'], colorscale='Viridis', showscale=True, 
+                        color=df_abs['velocity'], colorscale='Viridis', showscale=False, 
                         colorbar=None,
                         # colorbar=dict(title="Velocity")),
                     )))
     fig.update_layout(
-        title=str(showNumBatches) + " batches of dataloader, data has been unnormalized to verify correctness",
-        width=700,
-        height=700,)
+        title=str(showNumBatches) + " batches of dataloader, <br> data has been unnormalized to verify correctness",
+        width=500,
+        height=500,)
     fig.show()

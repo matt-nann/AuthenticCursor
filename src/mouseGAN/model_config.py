@@ -105,7 +105,9 @@ class C_Generator:
     num_lstm_layers: int = 4
     lr: float = 0.0001
     useOutsideTargetLoss: bool = False
-    drop_prob: float = 0.5
+    drop_prob: float = 0.1
+    layer_normalization: bool = True
+    residual_connections: bool = True
 
 @dataclass
 class Config:

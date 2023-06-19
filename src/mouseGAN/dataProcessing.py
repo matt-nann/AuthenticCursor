@@ -610,23 +610,26 @@ class MouseGAN_Data:
                 angles = random_state.rand(samples) * 2 * np.pi
             x_i = radiuses * np.cos(angles)
             y_i = radiuses * np.sin(angles)
+            # guaranteeing that the starting points are outside the buttons 
+            adjusted_min_width = np.minimum(min_width, radiuses * 0.5)
+            adjusted_max_width = np.minimum(max_width, radiuses * 0.5)
+            adjusted_min_height = np.minimum(min_height, radiuses * 0.5)
+            adjusted_max_height = np.minimum(max_height, radiuses * 0.5)
             if max_width == min_width:
                 targetWidths = np.ones(samples) * max_width
             else:
-                targetHeights = random_state.rand(samples) * (max_height - min_height) + min_height
+                targetWidths = random_state.rand(samples) * (adjusted_max_width - adjusted_min_width) + adjusted_min_width
             if max_height == min_height:
                 targetHeights = np.ones(samples) * max_height
             else:
-                targetWidths = random_state.rand(samples) * (max_width - min_width) + min_width
-            # TODO optimize
-            endLocs = [self.generateGaussianButtonClicks(width, height) for width, height in zip(targetWidths, targetHeights)]
+                targetHeights = random_state.rand(samples) * (adjusted_max_height - adjusted_min_height) + adjusted_min_height
+            endLocs = [self.generateGaussianButtonClicks(width, height) for width, height in zip(targetWidths, targetHeights)] # TODO optimize
             x_f = np.array([loc[0] for loc in endLocs])
             y_f = np.array([loc[1] for loc in endLocs])
             rawButtonTargets = np.stack([targetWidths, targetHeights, x_i, y_i, x_f, y_f], axis=1)
             all_rawButtonTargets.append(rawButtonTargets)
         return np.concatenate(all_rawButtonTargets, axis=0)
 
-    
     def createFakeWindMouseDataset(self, save=False,
                                 samples = 50000,
                                 low_radius = 100, high_radius = 1000,

@@ -50,6 +50,8 @@ def init_weights(m):
         pass
     elif type(m) == nn.Dropout:
         pass
+    elif type(m) == nn.LayerNorm:
+        pass
     else:
         if isinstance(m, nn.ModuleList) or isinstance(m, MinibatchDiscrimination) or isinstance(m, Generator) or isinstance(m, Discriminator):
             pass
@@ -57,8 +59,9 @@ def init_weights(m):
             raise ValueError("Unexpected module type {}".format(type(m)))
 
 class Generator(GeneratorBase):
-    def __init__(self, device, config):
+    def __init__(self, device, config : Config):
         c_g = config.generator
+        self.c_g = c_g
         self.config = config
         super(Generator, self).__init__(latent_dim=config.latent_dim, lr=c_g.lr)
         self.num_lstm_layers = c_g.num_lstm_layers  # number of LSTM layers
@@ -68,6 +71,9 @@ class Generator(GeneratorBase):
         self.fc_layer1 = nn.Linear(in_features=(self.config.latent_dim + config.num_feats + config.num_target_feats), out_features=c_g.hidden_units)
         # Use a list to manage all LSTM cells
         self.lstm_cells = nn.ModuleList([nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units) for _ in range(self.num_lstm_layers)])
+        # TODO why does layer normalization work
+        if c_g.layer_normalization:
+            self.layer_norms = nn.ModuleList([nn.LayerNorm(c_g.hidden_units) for _ in range(self.num_lstm_layers)])
         self.leaky_relu = nn.LeakyReLU(.2)
         self.dropout = nn.Dropout(p=c_g.drop_prob)
         self.fc_layer2 = nn.Linear(in_features=c_g.hidden_units, out_features=config.num_feats)
@@ -99,6 +105,10 @@ class Generator(GeneratorBase):
         state = states  # List of LSTM hidden states
         gen_feats = []
         stop_tokens = []
+        # Skip / Residual Connections : effective alleviating vanishing gradient problem for deep networks, 
+        #   allows gradients to propagate directly through the residual connections bypassing non-linear activation functions that cause gradients to explode or vanish
+        if self.c_g.residual_connections:
+            hidden_states = [] 
         sequenceStopped = torch.zeros([batch_size], device=self.device, dtype=torch.bool)  
         for i in range(self.MAX_SEQ_LEN):
             # concatenate current input features and previous timestep output features, and buttonTarget every sequence step
@@ -107,9 +117,15 @@ class Generator(GeneratorBase):
             # Pass through each LSTM cell
             for j in range(self.num_lstm_layers):
                 hidden, cell = self.lstm_cells[j](out if j == 0 else state[j-1][0], state[j])  # Pass the output from the previous layer or the input for the first layer
+                if self.c_g.layer_normalization:
+                    hidden = self.layer_norms[j](hidden)  # Apply layer normalization
                 hidden = self.dropout(hidden)  # Apply dropout to the hidden state
                 state[j] = (hidden, cell)
-            stop_tokens.append(torch.sigmoid(self.fc_stop_token(state[-1][0])))  # Predict stop token
+                if self.c_g.residual_connections: # add the residual connection
+                    if j > 0: # add the residual connection
+                        state[j] = (state[j][0] + hidden_states[-1], state[j][1])
+                    hidden_states.append(state[j][0])
+            stop_tokens.append(self.fc_stop_token(state[-1][0]))  # Predict stop token
             sequenceStopped = torch.logical_or(sequenceStopped, stop_tokens[-1] >= self.config.STOP_THRESHOLD)
             gen_feats.append(self.fc_layer2(state[-1][0])) # The output from the final LSTM layer
             if torch.all(sequenceStopped): # stopping sequence generation if sequences stopped
@@ -130,8 +146,8 @@ class Generator(GeneratorBase):
         weight = next(self.parameters()).data
         hidden = []
         for _ in range(self.num_lstm_layers):
-            h = weight.new(batch_size, self.hidden_units).zero_(device=self.device)
-            c = weight.new(batch_size, self.hidden_units).zero_(device=self.device)
+            h = weight.new(batch_size, self.hidden_units, device=self.device).zero_()
+            c = weight.new(batch_size, self.hidden_units, device=self.device).zero_()
             hidden.append((h, c))
         return hidden
 
@@ -214,9 +230,9 @@ class Discriminator(DiscriminatorBase):
         weight = next(self.parameters()).data
         layer_mult = 2 if self.lstm.bidirectional else 1
         hidden = (weight.new(self.num_layers * layer_mult, batch_size,
-                                self.hidden_units).zero_(device=self.device),
+                                self.hidden_units, device=self.device).zero_(),
                     weight.new(self.num_layers * layer_mult, batch_size,
-                                self.hidden_units).zero_(device=self.device))
+                                self.hidden_units, device=self.device).zero_())
         return hidden
 
 class MouseGAN(GAN):
