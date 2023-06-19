@@ -110,6 +110,7 @@ class C_Generator:
     layer_normalization: bool = True
     residual_connections: bool = True
     gradient_maxNorm : Optional[float] = None
+    useIndividualStopTokenLoss: bool = False
 
 @dataclass
 class Config:

@@ -283,7 +283,9 @@ class MouseGAN(GAN):
         """
         def hook_clip_grad_norm_(grad):
             # clip_grad_norm_ is in place so can't create a lambda function
+            # print("before norm grad: ", torch.isnan(grad).any(), torch.isinf(grad).any(), torch.max(grad), torch.min(grad))
             clip_grad_norm_(grad, c.discriminator.gradient_maxNorm)
+            # print("\tafter norm grad: ", torch.isnan(grad).any(), torch.isinf(grad).any(), torch.max(grad), torch.min(grad))
             return grad
         if c.discriminator.gradient_maxNorm is not None:
             for p in discriminator.parameters():
@@ -473,6 +475,7 @@ class MouseGAN(GAN):
         self.batchMetrics['d_real_out' + post] = d_real_out.mean().item()
         self.batchMetrics['d_fake_out' + post] = d_fake_out.mean().item()
         self.batchMetrics["d_loss" + post] = d_loss.item()
+        print("d_loss", d_loss.item(), "d_loss_real", loss_disc_real.item(), "d_loss_fake", loss_disc_fake.item(), "d_loss_dev", d_loss_dev.item() if self.c.discriminator.useEndDeviationLoss else 0)
         return d_loss, base_d_loss
     
     def generatorLoss(self, z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states, validation=False):
@@ -492,15 +495,11 @@ class MouseGAN(GAN):
         else:
             raise ValueError("Invalid loss function")
 
-        # print("fake_stop_tokens: ", fake_stop_tokens)
-        # if False:
-        # print(fake_stop_tokens)
         fake_lengths = torch.argmin((fake_stop_tokens < self.c.STOP_THRESHOLD).float(), dim=1)
         # print("fake_lengths: ", fake_lengths)
         fake_lengths = torch.where((fake_lengths == 0) & (fake_stop_tokens[:,-1] < self.c.STOP_THRESHOLD), fake_stop_tokens.shape[1], fake_lengths).float()
         g_stop_token_loss_length = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
-        # print("real_lengths", real_lengths.float().mean().item(), "fake_lengths: ", fake_lengths.mean().item())
-        if True:
+        if self.c.generator.useIndividualStopTokenLoss:
             max_seq_len = max(real_stop_tokens.shape[1], fake_stop_tokens.shape[1])
             if real_stop_tokens.shape[1] < fake_stop_tokens.shape[1]:
                 # pad real to match fake length
@@ -525,11 +524,14 @@ class MouseGAN(GAN):
                 print("_fake_stop_tokens", _fake_stop_tokens)
                 print("mask", mask)
                 raise
-        g_stop_token_loss = (g_stop_token_loss_length + g_stop_token_loss_stops) / 2
+            g_stop_token_loss = (g_stop_token_loss_length + g_stop_token_loss_stops) / 2
+            self.batchMetrics["g_stop_token_loss_stops" + post] = g_stop_token_loss_stops.item()
+            print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
+        else:
+            g_stop_token_loss = g_stop_token_loss_length
+            print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
         self.batchMetrics["g_stop_token_loss" + post] = g_stop_token_loss.item()
         self.batchMetrics["g_stop_token_loss_length" + post] = g_stop_token_loss_length.item()
-        self.batchMetrics["g_stop_token_loss_stops" + post] = g_stop_token_loss_stops.item()
-        print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
         g_loss += self.c.lambda_stopLoss * g_stop_token_loss
 
         # additional loss components
@@ -559,37 +561,68 @@ class MouseGAN(GAN):
         d_states = self.discriminator.init_hidden(_batch_size)
 
         z = self.generator.generate_noise(_batch_size)
-        with autocast(): # using mixed precision calculations if CUDA enabled, SPEED-UP
-            fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
+        _max_seq_len = real_stop_tokens.shape[1]
+        fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
 
-            d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
-            d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
+        d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
+        d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
 
-            d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+        d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
                                                 mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
         if is_training:
             self.optimizer_D.zero_grad()  # clear previous gradients
-            self.gradientScaler.scale(d_loss).backward() # compute gradients of all variables wrt loss
-            self.gradientScaler.unscale_(self.optimizer_D) # unscale the gradients of optimizer's assigned params in-place
-            self.gradientScaler.step(self.optimizer_D) # scaler performs the updates using the optimizer's assigned params
+            d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
+            self.optimizer_D.step() # perform updates using calculated gradients
 
         g_states = self.generator.init_hidden(_batch_size)
         d_states = self.discriminator.init_hidden(_batch_size)
-        with autocast():
-            g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
+        g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
 
         if is_training:
             self.optimizer_G.zero_grad()
-            self.gradientScaler.scale(g_loss).backward()
-            self.gradientScaler.unscale_(self.optimizer_G)
-            self.gradientScaler.step(self.optimizer_G)
-
-            self.gradientScaler.update()
-
+            g_loss.backward()
+            self.optimizer_G.step()
         if is_training:
             return d_loss, d_loss_base, g_loss
         else:
             return d_loss, g_loss, d_real_out, d_fake_out
+
+    # def run_batch(self, batchData, is_training):
+    #     mouse_trajectories, normButtons, normButtonLocs, real_stop_tokens, real_lengths = self.prepare_batch(batchData)
+    #     _batch_size = mouse_trajectories.shape[0]
+    #     g_states = self.generator.init_hidden(_batch_size)
+    #     d_states = self.discriminator.init_hidden(_batch_size)
+
+    #     z = self.generator.generate_noise(_batch_size)
+    #     with autocast(): # using mixed precision calculations if CUDA enabled, SPEED-UP
+    #         fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
+
+    #         d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
+    #         d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
+
+    #         d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+    #                                             mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
+    #     if is_training:
+    #         self.optimizer_D.zero_grad()  # clear previous gradients
+    #         self.gradientScaler.scale(d_loss).backward() # compute gradients of all variables wrt loss
+    #         self.gradientScaler.step(self.optimizer_D) # scaler performs the updates using the optimizer's assigned params
+
+    #     g_states = self.generator.init_hidden(_batch_size)
+    #     d_states = self.discriminator.init_hidden(_batch_size)
+    #     with autocast():
+    #         g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
+
+    #     if is_training:
+    #         self.optimizer_G.zero_grad()
+    #         self.gradientScaler.scale(g_loss).backward()
+    #         self.gradientScaler.step(self.optimizer_G)
+
+    #         self.gradientScaler.update()
+
+    #     if is_training:
+    #         return d_loss, d_loss_base, g_loss
+    #     else:
+    #         return d_loss, g_loss, d_real_out, d_fake_out
 
     def validation(self):
         self.generator.eval()
