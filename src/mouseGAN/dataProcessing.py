@@ -366,7 +366,7 @@ class MouseGAN_Data:
         numTrainSamples = int(self.TRAIN_TEST_SPLIT * totalSamples)
         buttonValues = np.empty((numTrainSamples, len(self.targetColumns)))
         all_traj_mean_std = np.empty((numTrainSamples, len(self.trajColumns), 2))
-        weights = np.empty((numTrainSamples))
+        weights_length = np.empty((numTrainSamples))
         i_statistic = 0
         for i_result, i_sample in enumerate(sampleIndexes):
             result = results[i_result]
@@ -382,13 +382,15 @@ class MouseGAN_Data:
                 buttonValues[i_statistic] = self.buttonTargets[-1]
                 all_traj_mean_std[i_statistic,:,0] =  traj_mean_std[0]
                 all_traj_mean_std[i_statistic,:,1] = traj_mean_std[1]
-                weights[i_statistic] = self.input_trajectories[-1].shape[0]
+                weights_length[i_statistic] = self.input_trajectories[-1].shape[0]
                 i_statistic += 1
         
         self.mean_button = buttonValues.mean(axis=0)
         self.std_button = buttonValues.std(axis=0)
-        self.mean_traj = np.average(all_traj_mean_std[:,:,0], weights=weights, axis=0)
-        self.std_traj = np.average(all_traj_mean_std[:,:,1], weights=weights, axis=0)
+        self.mean_traj = np.average(all_traj_mean_std[:,:,0], weights=weights_length, axis=0)
+        self.std_traj = np.average(all_traj_mean_std[:,:,1], weights=weights_length, axis=0)
+        self.mean_length = weights_length.mean()
+        self.std_length = weights_length.std()
 
     def processMouseData(self, SHOW_ALL=False, SHOW_ONE=False, num_sequences=10, samples=None):
         """
@@ -404,6 +406,7 @@ class MouseGAN_Data:
         if self.USE_FAKE_DATA:
             self.processFakeData(samples, percentPrint)
         else:
+            raise NotImplementedError("needs updating")
             self.trajectoryValues = [[] for i in range(len(self.trajColumns))]
             self.targetValues = [[] for i in range(len(self.targetColumns))]
             counter = 0

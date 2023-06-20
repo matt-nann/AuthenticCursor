@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
-from torch.nn.utils import clip_grad_norm_, clip_grad_value_, clip_grad_norm
+from torch.nn.utils import clip_grad_norm_, clip_grad_value_
 
 from .model_config import LOSS_FUNC, LR_SCHEDULERS, Config
 from .dataProcessing import MouseGAN_Data
@@ -66,7 +66,7 @@ def init_weights(m):
             raise ValueError("Unexpected module type {}".format(type(m)))
 
 class Generator(GeneratorBase):
-    def __init__(self, device, config : Config):
+    def __init__(self, device, config : Config, mean_length, std_length):
         c_g = config.generator
         self.c_g = c_g
         self.config = config
@@ -75,7 +75,10 @@ class Generator(GeneratorBase):
         self.device = device
         self.MAX_SEQ_LEN = config.MAX_SEQ_LEN
         self.hidden_units = c_g.hidden_units
+        self.mean_length = mean_length
+        self.std_length = std_length
         self.fc_input_g = nn.Linear(in_features=(self.config.latent_dim + config.num_feats + config.num_target_feats), out_features=c_g.hidden_units)
+        self.fc_sequenceLength = nn.Linear(in_features=c_g.hidden_units, out_features=1) # predicting the stop token
         # Use a list to manage all LSTM cells
         self.lstm_cells_g = nn.ModuleList([nn.LSTMCell(input_size=c_g.hidden_units, hidden_size=c_g.hidden_units) for _ in range(self.num_lstm_layers)])
         # TODO why does layer normalization work
@@ -84,7 +87,6 @@ class Generator(GeneratorBase):
         self.leaky_relu = nn.LeakyReLU(.2)
         self.dropout = nn.Dropout(p=c_g.drop_prob)
         self.fc_output_g = nn.Linear(in_features=c_g.hidden_units, out_features=config.num_feats)
-        self.fc_stop_token_g = nn.Linear(in_features=c_g.hidden_units, out_features=1) # predicting the stop token
         for m in self.modules():
             init_weights(m)
     
@@ -110,14 +112,20 @@ class Generator(GeneratorBase):
         batch_size, latent_dim = z.shape
         prev_gen = torch.zeros([batch_size, self.config.num_feats], device=self.device).uniform_()
         state = states  # List of LSTM hidden states
-        gen_feats = []
-        stop_tokens = []
         # Skip / Residual Connections : effective alleviating vanishing gradient problem for deep networks, 
         #   allows gradients to propagate directly through the residual connections bypassing non-linear activation functions that cause gradients to explode or vanish
         if self.c_g.residual_connections:
-            hidden_states = [] 
-        sequenceStopped = torch.zeros([batch_size], device=self.device, dtype=torch.bool)  
-        for i in range(self.MAX_SEQ_LEN):
+            hidden_states = []
+        concat_in = torch.cat((z, prev_gen, buttonTarget), dim=-1)
+        normSequenceLengths = self.fc_sequenceLength(self.leaky_relu(self.fc_input_g(concat_in)))
+        sequenceLengths = self.std_length * normSequenceLengths + self.mean_length
+        MAX_SEQ_LEN = round(sequenceLengths.max().item())
+        MAX_SEQ_LEN = min(MAX_SEQ_LEN, self.MAX_SEQ_LEN)
+        MAX_SEQ_LEN = max(MAX_SEQ_LEN, 1)
+        gen_feats = torch.zeros([batch_size, MAX_SEQ_LEN, self.config.num_feats], device=self.device)
+        # print("Generator")
+        # print("\tMAX_SEQ_LEN", MAX_SEQ_LEN)
+        for i in range(MAX_SEQ_LEN):
             # concatenate current input features and previous timestep output features, and buttonTarget every sequence step
             concat_in = torch.cat((z, prev_gen, buttonTarget), dim=-1)
             out = self.leaky_relu(self.fc_input_g(concat_in))
@@ -132,11 +140,12 @@ class Generator(GeneratorBase):
                     if j > 0: # add the residual connection
                         state[j] = (state[j][0] + hidden_states[-1], state[j][1])
                     hidden_states.append(state[j][0])
-            stop_tokens.append(self.fc_stop_token_g(state[-1][0]))  # Predict stop token
-            sequenceStopped = torch.logical_or(sequenceStopped, stop_tokens[-1] >= self.config.STOP_THRESHOLD)
-            gen_feats.append(self.fc_output_g(state[-1][0])) # The output from the final LSTM layer
-            if torch.all(sequenceStopped): # stopping sequence generation if sequences stopped
-                break
+            gen_feats[:, i, :] = self.fc_output_g(state[-1][0])  # The output from the final LSTM layer
+        sequenceLengths.squeeze_(dim=-1)
+        # print("\t",sequenceLengths)
+        # print("\t",gen_feats)
+        return gen_feats, sequenceLengths, state
+    
         # import plotly.graph_objects as go
         # fig = go.Figure()
         # for param in self.fc_layer2.parameters():
@@ -144,9 +153,6 @@ class Generator(GeneratorBase):
         # fig.update_layout(title_text="Histogram of fc_layer2 weights", width=450, height=300)
         # fig.show()
         # seq_len * (batch_size * num_feats) -> (batch_size * seq_len * num_feats)
-        gen_feats = torch.stack(gen_feats, dim=1)
-        stop_tokens = torch.stack(stop_tokens, dim=1).squeeze(-1)
-        return gen_feats, stop_tokens, state
 
     def init_hidden(self, batch_size):
         ''' Initialize hidden state for each LSTM layer '''
@@ -192,20 +198,17 @@ class Discriminator(DiscriminatorBase):
         for m in self.modules():
             init_weights(m)
 
-    def computeMask(self, stop_tokens):
-        with torch.no_grad():
-            mask = (stop_tokens <= self.config.STOP_THRESHOLD).float()
-            keepAll = torch.sum(mask, dim=1) == mask.shape[1] 
-            min_indices = torch.argmin(mask, dim=1) + 1
-            min_indices[keepAll] = mask.shape[1]
-            range_tensor = torch.arange(stop_tokens.shape[1], device=stop_tokens.device).expand(stop_tokens.shape[0], -1)
-            mask = (range_tensor < min_indices.unsqueeze(-1)).float()
-            return mask
-
-    def forward(self, trajectory, buttonTarget, stop_tokens, state):
+    def forward(self, trajectory, buttonTarget, lengths, state, real=False):
+        lengths = torch.round(lengths.float()).long()
+        lengths = torch.clamp(lengths, min=1) 
         input_feats = torch.cat((trajectory, buttonTarget.unsqueeze(1).repeat(1, trajectory.shape[1], 1)), dim=-1)
-        mask = self.computeMask(stop_tokens)
+        mask = torch.arange(trajectory.shape[1], device=self.device).expand(trajectory.shape[0], trajectory.shape[1]) < lengths.unsqueeze(1)
+        # print("Discriminator: " + ("real" if real else "fake"))
+        # print("\t(input_feats.shape): ", input_feats.shape)
+        # print("\tlengths: ", lengths)
+        # print("\td mask: ", mask)
         input_feats = input_feats * mask.unsqueeze(-1)
+        # print("\td input_feats: ", input_feats)
         if self.miniBatchDisc:
             x = self.miniBatch_d(input_feats)
         else:
@@ -276,8 +279,7 @@ class MouseGAN(GAN):
         self.criterionMAE = nn.L1Loss()
 
         self.gradientScaler = GradScaler() # gradient scaling, multiple small grad
-
-        generator = Generator(device, c).to(device)
+        generator = Generator(device, c, dataset.mean_length, dataset.std_length).to(device)
         discriminator = Discriminator(device, c).to(device)
 
         """
@@ -421,6 +423,7 @@ class MouseGAN(GAN):
         return g_losses.mean()
 
     def compute_gradient_penalty(self, real_samples, fake_samples, buttonTargets, d_state, phi=1):
+        raise NotImplementedError("no longer working with gan architecture changes, need to update for variable lengths")
         """        
         helps ensure that the GAN learns smoothly and generates realistic samples by measuring and penalizing abrupt changes in the discriminator's predictions.
 
@@ -487,81 +490,36 @@ class MouseGAN(GAN):
             # print("d_loss", d_loss.item(), "d_loss_real", loss_disc_real.item(), "d_loss_fake", loss_disc_fake.item(), "d_loss_dev", d_loss_dev.item() if self.c.discriminator.useEndDeviationLoss else 0)
         return d_loss, base_d_loss
     
-    def generatorLoss(self, z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states, validation=False):
+    def generatorLoss(self, z, normButtonLocs, real_lengths, g_states, d_states, validation=False):
         normButtons = normButtonLocs[:, 0:4]
         post = "_val" if validation else ""
         if self.c.lossFunc.type.value == LOSS_FUNC.WGAN_GP.value:
-            fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
-            d_logits_gen, _ = self.discriminator(fake_traj, normButtons, fake_stop_tokens, d_states)
+            fake_traj, fake_lengths, _ = self.generator(z, normButtons, g_states)
+            d_logits_gen, _ = self.discriminator(fake_traj, normButtons, fake_lengths, d_states, real=False)
             # The generator's optimizer (self.optimizer_G) tries to minimize this loss, which is equivalent to maximizing the average discriminator's score for the generated data. As this loss is minimized, the generator gets better at producing data that looks real to the discriminator.ine)
             g_loss = - torch.mean(d_logits_gen)
         elif self.c.lossFunc.type.value == LOSS_FUNC.LSGAN.value:
             # need to redo generator pass because the previous gradient graph is discarded once the discriminator is zeroed
-            fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states) 
-            d_logits_gen, _ = self.discriminator(fake_traj, normButtons, fake_stop_tokens, d_states)
+            fake_traj, fake_lengths, _ = self.generator(z, normButtons, g_states) 
+            d_logits_gen, _ = self.discriminator(fake_traj, normButtons, fake_lengths, d_states, real=False)
             d_logits_gen = d_logits_gen.view(-1)
             g_loss = self.criterionMSE(d_logits_gen, torch.ones_like(d_logits_gen))
-            if not validation:
-                self.optimizer_G.zero_grad()
-                g_loss.backward(retain_graph=True)
-                self.optimizer_G.step()
         else:
             raise ValueError("Invalid loss function")
         
-        # with torch.no_grad():
-        fake_lengths = torch.argmin((fake_stop_tokens < self.c.STOP_THRESHOLD).float(), dim=1)
-        fake_lengths = torch.where((fake_lengths == 0) & (fake_stop_tokens[:,-1] < self.c.STOP_THRESHOLD), fake_stop_tokens.shape[1], fake_lengths).float().requires_grad_(True)
-        g_stop_token_loss_length = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
-        if not validation:
-            self.optimizer_G.zero_grad()
-            g_stop_token_loss_length.backward(retain_graph=True)
-            self.optimizer_G.step()
-        if self.c.generator.useIndividualStopTokenLoss:
-            max_seq_len = max(real_stop_tokens.shape[1], fake_stop_tokens.shape[1])
-            if real_stop_tokens.shape[1] < fake_stop_tokens.shape[1]:  # pad real to match fake length
-                real_stop_tokens = F.pad(real_stop_tokens, (0, max_seq_len - real_stop_tokens.shape[1]), "constant", 1).float()                   
-            elif real_stop_tokens.shape[1] > fake_stop_tokens.shape[1]: # pad fake to match real length
-                fake_stop_tokens = F.pad(fake_stop_tokens, (0, max_seq_len - fake_stop_tokens.shape[1]), "constant", 1).float()
-            mask = self.discriminator.computeMask(fake_stop_tokens) # mask is for zeroing out any input that is after the stop
-            _fake_stop_tokens = torch.ones_like(fake_stop_tokens)
-            fake_stop_tokens *= mask
-            fake_stop_tokens = torch.where(fake_stop_tokens == 0, _fake_stop_tokens, fake_stop_tokens) # need to set the masked area to 1 signaling the stops
-            fake_stop_tokens = fake_stop_tokens.float()
-            real_stop_tokens = real_stop_tokens.float()
-            try:
-                g_stop_token_loss_stops = F.cross_entropy(fake_stop_tokens, real_stop_tokens)
-            except:
-                print("fake_stop_tokens.dtype: ", fake_stop_tokens.dtype, "real_stop_tokens.dtype: ", real_stop_tokens.dtype)
-                print("fake_stop_tokens", fake_stop_tokens)
-                print("real_stop_tokens", real_stop_tokens)
-                print("_fake_stop_tokens", _fake_stop_tokens)
-                print("mask", mask)
-                raise
-            if not validation:
-                self.optimizer_G.zero_grad()
-                g_stop_token_loss_stops.backward(retain_graph=True)
-                self.optimizer_G.step()
-            g_stop_token_loss = (g_stop_token_loss_length + g_stop_token_loss_stops) / 2
-            self.batchMetrics["g_stop_token_loss_stops" + post] = g_stop_token_loss_stops.item()
-            # print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss_stops", g_stop_token_loss_stops.item(), "g_stop_token_loss", g_stop_token_loss.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
-        else:
-            g_stop_token_loss = g_stop_token_loss_length
-            # print("g_loss", g_loss.item(), "g_stop_token_loss_length", g_stop_token_loss_length.item(), "g_stop_token_loss * lambda_stopLoss", g_stop_token_loss.item() * self.c.lambda_stopLoss)
-        self.batchMetrics["g_stop_token_loss" + post] = g_stop_token_loss.item()
-        self.batchMetrics["g_stop_token_loss_length" + post] = g_stop_token_loss_length.item()
-        g_loss += self.c.lambda_stopLoss * g_stop_token_loss
-
-        # additional loss components
-        if self.c.generator.useOutsideTargetLoss:
-            g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
-            g_loss_missed = self.outsideTargetLoss(g_finalLocations, targetWidths, targetHeights)
-            if not validation:
-                self.optimizer_G.zero_grad()
-                g_loss_missed.backward(retain_graph=False)
-                self.optimizer_G.step()
-            g_loss += g_loss_missed
-            self.batchMetrics["g_loss_missed" + post] = g_loss_missed.item()
-        self.batchMetrics["g_loss" + post] = g_loss.item()
+        with torch.no_grad():
+            # print("real_lengths", real_lengths, "fake_lengths", fake_lengths)
+            g_length_loss = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
+            self.batchMetrics["g_length_loss" + post] = g_length_loss.item()
+            g_loss += g_length_loss # self.c.lambda_stopLoss * 
+            # additional loss components
+            if self.c.generator.useOutsideTargetLoss:
+                g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
+                g_loss_missed = self.outsideTargetLoss(g_finalLocations, targetWidths, targetHeights)
+                g_loss += g_loss_missed
+                self.batchMetrics["g_loss_missed" + post] = g_loss_missed.item()
+            self.batchMetrics["g_loss" + post] = g_loss.item()
+        # print("g_loss", g_loss.item(), "g_length_loss", g_length_loss.item(), "g_loss_missed", g_loss_missed.item() if self.c.generator.useOutsideTargetLoss else 0)
         return g_loss
     
     def prepare_batch(self, dataTuple):
@@ -572,21 +530,19 @@ class MouseGAN(GAN):
         normButtons = normButtonLocs[:, :4]
         _batch_size = mouse_trajectories.shape[0]
         max_batch_seqLength = mouse_trajectories.shape[1]
-        real_stop_tokens = torch.arange(max_batch_seqLength, device=self.device).expand(_batch_size, -1) >= real_lengths.unsqueeze(1).float()
-        return mouse_trajectories, normButtons, normButtonLocs, real_stop_tokens, real_lengths
+        return mouse_trajectories, normButtons, normButtonLocs, real_lengths
     
     def run_batch(self, i_batch, batchData, is_training):
-        mouse_trajectories, normButtons, normButtonLocs, real_stop_tokens, real_lengths = self.prepare_batch(batchData)
+        mouse_trajectories, normButtons, normButtonLocs, real_lengths = self.prepare_batch(batchData)
         _batch_size = mouse_trajectories.shape[0]
         g_states = self.generator.init_hidden(_batch_size)
         d_states = self.discriminator.init_hidden(_batch_size)
 
         z = self.generator.generate_noise(_batch_size)
-        _max_seq_len = real_stop_tokens.shape[1]
-        fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
+        fake_traj, fake_lengths, _ = self.generator(z, normButtons, g_states)
 
-        d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
-        d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
+        d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_lengths, d_states, real=True)
+        d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_lengths, d_states, real=False)
 
         d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
                                                 mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
@@ -596,12 +552,11 @@ class MouseGAN(GAN):
             self.optimizer_D.step() # perform updates using calculated gradients
         g_states = self.generator.init_hidden(_batch_size)
         d_states = self.discriminator.init_hidden(_batch_size)
-        g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states, validation=not is_training)
-
-        # if is_training:
-        #     self.optimizer_G.zero_grad()
-        #     g_loss.backward()
-        #     self.optimizer_G.step()
+        g_loss = self.generatorLoss(z, normButtonLocs, real_lengths, g_states, d_states, validation=not is_training)
+        if is_training:
+            self.optimizer_G.zero_grad()
+            g_loss.backward()
+            self.optimizer_G.step()
         if is_training:
             return d_loss, d_loss_base, g_loss
         else:
@@ -725,20 +680,13 @@ class MouseGAN(GAN):
         min_width = np.min(rawButtonTargets[:,0])
         min_height = np.min(rawButtonTargets[:,1])
         _rawButtonTargets = torch.tensor(rawButtonTargets, dtype=torch.float32).to(self.device)
-        generated_trajs, fake_stop_tokens = self.generate(_rawButtonTargets)
+        generated_trajs, fake_lengths = self.generate(_rawButtonTargets)
         _rawButtonTargets = _rawButtonTargets.detach().cpu().numpy()
         generated_trajs = generated_trajs.detach().cpu().numpy()
-        fake_stop_tokens = fake_stop_tokens.detach().cpu().numpy()
+        fake_lengths = fake_lengths.detach().cpu().numpy()
         shapes = []
         for i in range(samples):
-            generated_traj = generated_trajs[i]
-            indexes = np.where(fake_stop_tokens[i] < self.c.STOP_THRESHOLD)[0]
-            masked_generated_traj = generated_traj[indexes]
-            if masked_generated_traj.shape[0] == 0:
-                if generated_traj.shape != (1,2):
-                    generated_traj = generated_trajs[i][0].reshape(1, 2)
-            else:
-                generated_traj = masked_generated_traj
+            generated_traj = generated_trajs[i][:round(fake_lengths[i])]
             rawButtonTarget = rawButtonTargets[i]
             df_sequence = pd.DataFrame(generated_traj, columns=self.dataset.trajColumns)
             df_target = pd.DataFrame([rawButtonTarget], columns=self.dataset.targetColumns)
