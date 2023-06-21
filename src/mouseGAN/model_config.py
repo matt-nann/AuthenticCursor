@@ -47,6 +47,7 @@ class C_LossGap_Sch:
     discLossDecay: float = 0.8
     lr_max: float = 0.001
     lr_min: float = 1*10**(-9)
+    restart_after: Optional[int] = None
 
 @dataclass
 class C_Step_Sch:
@@ -110,10 +111,12 @@ class C_Generator:
     residual_connections: bool = True
     gradient_maxNorm : Optional[float] = None
     gradient_maxValue : Optional[float] = None
-    useLengthLoss: bool = False
+    useSeqLengthLoss: bool = False
     lengthLossWeight: float = 0.25
     useOutsideTargetLoss: bool = False
     outsideTargetLossWeight : float = 0.25
+    usePathLengthLoss: bool = False
+    pathLengthLossWeight : float = 0.25
 
 @dataclass
 class Config:
@@ -134,7 +137,8 @@ class Config:
 
     def __post_init__(self):
         if self.G_lr_scheduler is None:
-            # self.G_lr_scheduler = C_EMA_Plateua_Sch(patience=self.BATCH_SIZE, cooldown=int(self.BATCH_SIZE/8))
             self.G_lr_scheduler = None
+            # self.G_lr_scheduler = C_EMA_Plateua_Sch(patience=self.BATCH_SIZE, cooldown=int(self.BATCH_SIZE/8))
         if self.D_lr_scheduler is None:
-            self.D_lr_scheduler = C_LossGap_Sch(cooldown=int(self.BATCH_SIZE/8))
+            self.D_lr_scheduler = None
+            # self.D_lr_scheduler = C_LossGap_Sch(cooldown=int(self.BATCH_SIZE/8))

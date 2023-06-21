@@ -437,6 +437,24 @@ class MouseGAN(GAN):
             # Lastly, you can add a small epsilon value before taking the square root to avoid taking the square root of zero:?
             g_losses = ((masked_dists + 1e-8) ** 0.5)
         return g_losses.mean()
+    
+    def pathLengthLoss(self, fake_traj, fake_lengths, real_traj, real_lengths):
+        rawRealTraj = real_traj * self.std_traj + self.mean_traj
+        rawFakeTraj = fake_traj * self.std_traj + self.mean_traj
+
+        fake_lengths = torch.round(fake_lengths.float()).long()
+        fake_lengths = torch.clamp(fake_lengths, min=1) 
+        mask = torch.arange(rawFakeTraj.shape[1], device=self.device).expand(rawFakeTraj.shape[0], rawFakeTraj.shape[1]) < fake_lengths.unsqueeze(1)
+        rawFakeTraj = rawFakeTraj * mask.unsqueeze(2)
+
+        real_lengths = torch.round(real_lengths.float()).long()
+        mask = torch.arange(rawRealTraj.shape[1], device=self.device).expand(rawRealTraj.shape[0], rawRealTraj.shape[1]) < real_lengths.unsqueeze(1)
+        rawRealTraj = rawRealTraj * mask.unsqueeze(2)
+
+        fakePathLength = torch.sqrt(torch.sum(torch.square(rawFakeTraj[:, 1:] - rawFakeTraj[:, :-1]), dim=2))
+        realPathLength = torch.sqrt(torch.sum(torch.square(rawRealTraj[:, 1:] - rawRealTraj[:, :-1]), dim=2))
+        g_path_length_loss = torch.abs(fakePathLength.mean() - realPathLength.mean())
+        return g_path_length_loss
 
     def compute_gradient_penalty(self, real_samples, fake_samples, buttonTargets, d_state, phi=1):
         raise NotImplementedError("no longer working with gan architecture changes, need to update for variable lengths")
@@ -486,7 +504,7 @@ class MouseGAN(GAN):
             d_loss = (loss_disc_real + loss_disc_fake) / 2
             self.batchMetrics["d_loss_real" + post] = loss_disc_real.item()
             self.batchMetrics["d_loss_fake" + post] = loss_disc_fake.item()
-            # Positive scores generally indicate that the discriminator considers the sample as real, while negative scores indicate the sample is classified as fake.
+        # Positive scores generally indicate that the discriminator considers the sample as real, while negative scores indicate the sample is classified as fake.
         else:
             raise ValueError("Invalid loss function")
         d_loss_base = d_loss.clone() # clones the computational graph too
@@ -507,7 +525,7 @@ class MouseGAN(GAN):
             # print("d_loss", d_loss.item(), "d_loss_real", loss_disc_real.item(), "d_loss_fake", loss_disc_fake.item(), "d_loss_dev", d_loss_dev.item() if self.c.discriminator.useEndDeviationLoss else 0)
         return d_loss, d_loss_base
     
-    def generatorLoss(self, z, normButtonLocs, real_lengths, g_states, d_states, validation=False):
+    def generatorLoss(self, z, normButtonLocs, real_lengths, mouse_trajectories, g_states, d_states, validation=False):
         normButtons = normButtonLocs[:, 0:4]
         post = "_val" if validation else ""
         if self.c.lossFunc.type.value == LOSS_FUNC.WGAN_GP.value:
@@ -526,11 +544,15 @@ class MouseGAN(GAN):
         self.batchMetrics["g_loss_base" + post] = g_loss.item()
         g_loss_base = g_loss.clone() # clones the computational graph too
         with torch.no_grad():
-            if self.c.generator.useLengthLoss:
+            if self.c.generator.usePathLengthLoss:
+                g_path_length_loss = self.pathLengthLoss(fake_traj, fake_lengths, mouse_trajectories, real_lengths)
+                self.batchMetrics["g_path_length_loss" + post] = g_path_length_loss.item()
+                g_loss += g_path_length_loss * self.c.generator.pathLengthLossWeight
+            if self.c.generator.useSeqLengthLoss:
                 # print("real_lengths", real_lengths, "fake_lengths", fake_lengths)
-                g_length_loss = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
+                g_seqLength_loss = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
                 self.batchMetrics["g_length_loss" + post] = g_length_loss.item()
-                g_loss += g_length_loss * self.c.generator.lengthLossWeight
+                g_loss += g_seqLength_loss * self.c.generator.lengthLossWeight
             # additional loss components
             if self.c.generator.useOutsideTargetLoss:
                 g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs, fake_lengths)
@@ -569,7 +591,7 @@ class MouseGAN(GAN):
             self.optimizer_D.step() # perform updates using calculated gradients
         g_states = self.generator.init_hidden(_batch_size)
         d_states = self.discriminator.init_hidden(_batch_size)
-        g_loss, g_loss_base = self.generatorLoss(z, normButtonLocs, real_lengths, g_states, d_states, validation=not is_training)
+        g_loss, g_loss_base = self.generatorLoss(z, normButtonLocs, real_lengths, mouse_trajectories, g_states, d_states, validation=not is_training)
         if is_training and not freeze_g:
             self.optimizer_G.zero_grad()
             g_loss.backward()

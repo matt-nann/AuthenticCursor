@@ -152,33 +152,3 @@ class GAN(metaclass=abc.ABCMeta):
         save_path = os.path.join(output_dir, 'GAN_Loss_per_Epoch_final.png')
         plt.savefig(save_path, transparent=True)
         plt.close()
-
-# class DLoss(nn.Module):
-#     ''' C-RNN-GAN discriminator loss
-#     '''
-#     def __init__(self, label_smoothing=False):
-#         super(DLoss, self).__init__()
-#         self.label_smoothing = label_smoothing
-
-#     def forward(self, logits_real, logits_gen):
-#         ''' Discriminator loss
-
-#         logits_real: logits from D, when input is real
-#         logits_gen: logits from D, when input is from Generator
-
-#         loss = -(ylog(p) + (1-y)log(1-p))
-
-#         '''
-#         logits_real = torch.clamp(logits_real, EPSILON, 1.0)
-#         d_loss_real = -torch.log(logits_real)
-
-#         if self.label_smoothing:
-#             p_fake = torch.clamp((1 - logits_real), EPSILON, 1.0)
-#             d_loss_fake = -torch.log(p_fake)
-#             d_loss_real = 0.9*d_loss_real + 0.1*d_loss_fake
-
-#         logits_gen = torch.clamp((1 - logits_gen), EPSILON, 1.0)
-#         d_loss_gen = -torch.log(logits_gen)
-
-#         batch_loss = d_loss_real + d_loss_gen
-#         return torch.mean(batch_loss)
