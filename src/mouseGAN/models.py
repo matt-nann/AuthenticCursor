@@ -333,8 +333,8 @@ class MouseGAN(GAN):
             self.discrim_loss = []
             self.gen_loss = []
             try:
-                wandb.watch(self.generator, log='all', log_freq=10)
-                wandb.watch(self.discriminator, log='all', log_freq=10)
+                wandb.watch(self.generator, log='all', log_freq=10, log_graph=True, idx=0)
+                wandb.watch(self.discriminator, log='all', log_freq=10, log_graph=True, idx=1)
             except: 
                 ...
             for epoch in range(self.startingEpoch, self.c.num_epochs + self.startingEpoch):
@@ -508,10 +508,12 @@ class MouseGAN(GAN):
             raise ValueError("Invalid loss function")
         
         with torch.no_grad():
-            # print("real_lengths", real_lengths, "fake_lengths", fake_lengths)
-            g_length_loss = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
-            self.batchMetrics["g_length_loss" + post] = g_length_loss.item()
-            g_loss += g_length_loss # self.c.lambda_stopLoss * 
+            if self.c.generator.useLengthLoss:
+                # print("real_lengths", real_lengths, "fake_lengths", fake_lengths)
+                g_length_loss = self.criterionMAE(real_lengths.reshape(1,-1).float(), fake_lengths.reshape(1,-1).float())
+                self.batchMetrics["g_length_loss" + post] = g_length_loss.item()
+                g_loss += g_length_loss # self.c.lambda_stopLoss * 
+
             # additional loss components
             if self.c.generator.useOutsideTargetLoss:
                 g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
@@ -528,40 +530,9 @@ class MouseGAN(GAN):
         mouse_trajectories = mouse_trajectories.to(self.device)
         normButtonLocs = normButtonLocs.to(self.device).squeeze(1)
         normButtons = normButtonLocs[:, :4]
-        _batch_size = mouse_trajectories.shape[0]
-        max_batch_seqLength = mouse_trajectories.shape[1]
         return mouse_trajectories, normButtons, normButtonLocs, real_lengths
+
     
-    def run_batch(self, i_batch, batchData, is_training):
-        mouse_trajectories, normButtons, normButtonLocs, real_lengths = self.prepare_batch(batchData)
-        _batch_size = mouse_trajectories.shape[0]
-        g_states = self.generator.init_hidden(_batch_size)
-        d_states = self.discriminator.init_hidden(_batch_size)
-
-        z = self.generator.generate_noise(_batch_size)
-        fake_traj, fake_lengths, _ = self.generator(z, normButtons, g_states)
-
-        d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_lengths, d_states, real=True)
-        d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_lengths, d_states, real=False)
-
-        d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
-                                                mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
-        if is_training:
-            self.optimizer_D.zero_grad()  # clear previous gradients
-            d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
-            self.optimizer_D.step() # perform updates using calculated gradients
-        g_states = self.generator.init_hidden(_batch_size)
-        d_states = self.discriminator.init_hidden(_batch_size)
-        g_loss = self.generatorLoss(z, normButtonLocs, real_lengths, g_states, d_states, validation=not is_training)
-        if is_training:
-            self.optimizer_G.zero_grad()
-            g_loss.backward()
-            self.optimizer_G.step()
-        if is_training:
-            return d_loss, d_loss_base, g_loss
-        else:
-            return d_loss, g_loss, d_real_out, d_fake_out
-
     # def run_batch(self, batchData, is_training):
     #     mouse_trajectories, normButtons, normButtonLocs, real_stop_tokens, real_lengths = self.prepare_batch(batchData)
     #     _batch_size = mouse_trajectories.shape[0]
@@ -598,6 +569,36 @@ class MouseGAN(GAN):
     #         return d_loss, d_loss_base, g_loss
     #     else:
     #         return d_loss, g_loss, d_real_out, d_fake_out
+
+    def run_batch(self, i_batch, batchData, is_training):
+        mouse_trajectories, normButtons, normButtonLocs, real_lengths = self.prepare_batch(batchData)
+        _batch_size = mouse_trajectories.shape[0]
+        g_states = self.generator.init_hidden(_batch_size)
+        d_states = self.discriminator.init_hidden(_batch_size)
+
+        z = self.generator.generate_noise(_batch_size)
+        fake_traj, fake_lengths, _ = self.generator(z, normButtons, g_states)
+
+        d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_lengths, d_states, real=True)
+        d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_lengths, d_states, real=False)
+
+        d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
+                                                mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
+        if is_training:
+            self.optimizer_D.zero_grad()  # clear previous gradients
+            d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
+            self.optimizer_D.step() # perform updates using calculated gradients
+        g_states = self.generator.init_hidden(_batch_size)
+        d_states = self.discriminator.init_hidden(_batch_size)
+        g_loss = self.generatorLoss(z, normButtonLocs, real_lengths, g_states, d_states, validation=not is_training)
+        if is_training:
+            self.optimizer_G.zero_grad()
+            g_loss.backward()
+            self.optimizer_G.step()
+        if is_training:
+            return d_loss, d_loss_base, g_loss
+        else:
+            return d_loss, g_loss, d_real_out, d_fake_out
 
     def validation(self):
         self.generator.eval()
