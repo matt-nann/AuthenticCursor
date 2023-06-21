@@ -39,7 +39,7 @@ class GapScheduler(LRScheduler):
         self.loss_max = loss_max if loss_max is not None else 0.1*ideal_loss
         self.lr_shrinkMin = lr_shrinkMin
         self.lr_growthMax = lr_growthMax
-        super(GapScheduler, self).__init__(optimizer)
+        super().__init__(optimizer)
         self.verbose = verbose
         self.scale_history = []
         self.LR_history = []
@@ -52,24 +52,28 @@ class GapScheduler(LRScheduler):
 
     def get_lr(self):
         lr_scaleFactor = self.lr_scheduler()
+        restart = False
+        if self.restart_after is not None:
+            if self.minimum_lr_counter >= self.restart_after:
+                self.minimum_lr_counter = 0
+                self.base_lrs = [self.lr_max] * len(self.base_lrs)
+                restart = True
+            elif self.base_lrs[0] == self.lr_min:
+                self.minimum_lr_counter += 1
         if self.scale_history:
             shrinkTwice = self.scale_history[-1] < 1.0 and lr_scaleFactor < 1.0
             # growTwice = self.scale_history[-1] > 1.0 and lr_scaleFactor > 1.0
             growTwice = False
-            if (shrinkTwice or growTwice) and self.cooldown_timer > 0:
+            if (shrinkTwice or growTwice) and self.cooldown_timer > 0 and not restart:
                 self.cooldown_timer -= 1
                 return self.base_lrs
             else:
                 self.cooldown_timer = self.cooldown
-        if self.restart_after is not None:
-            if self.minimum_lr_counter > self.restart_after:
-                self.minimum_lr_counter = 0
-                self.base_lrs = [self.lr_max] * len(self.base_lrs)
-            elif self.base_lrs[0] == self.lr_min:
-                self.minimum_lr_counter += 1
         self.scale_history.append(lr_scaleFactor)
         self.LR_history.append(self.base_lrs[0])
         self.step_history.append(self.optimizer._step_count)
+        if restart:
+            return self.base_lrs
         return [np.clip(lr_scaleFactor * base_lr, self.lr_min, self.lr_max) for base_lr in self.base_lrs]
     
     def lr_scheduler(self):
@@ -123,7 +127,7 @@ class GapScheduler(LRScheduler):
         else:
             self.smoothDiscLoss = self.discLossDecay * self.smoothDiscLoss + (1-self.discLossDecay) * discriminator_batch_loss 
         # print("\t\tLR_sch loss: ", temp, " -> ", self.smoothDiscLoss.item())
-        super(GapScheduler, self).step()
+        super().step()
         self.base_lrs = list(map(lambda group: group['lr'], self.optimizer.param_groups))
 
 
