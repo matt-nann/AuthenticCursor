@@ -43,10 +43,6 @@ class GeneratorBase(nn.Module, metaclass=abc.ABCMeta):
         self.beta2 = beta2
         self.eps = eps
         self.latent_dim = latent_dim
-    
-    def init_weights(self):
-        for m in self.modules():
-            init_weights(m)
 
     def optim_parameters(self):
         return {'lr': self.lr, 'betas': (self.beta1, self.beta2), 'eps': self.eps}

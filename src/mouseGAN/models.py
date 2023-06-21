@@ -300,18 +300,20 @@ class MouseGAN(GAN):
                 If the gradients of all layers saturate at the threshold (clip) value this might prevent convergence. Early unhealthy gradients cascade across the network making more gradients getting clipped.
         https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
         """
-        def hook_clip_grad_norm_(grad):
+        def hook_gener(grad):
             # clip_grad_norm_ is in place so can't create a lambda function
-            # print("before norm grad: ", torch.isnan(grad).any(), torch.isinf(grad).any(), torch.max(grad), torch.min(grad))
             clip_grad_norm_(grad, c.discriminator.gradient_maxNorm)
-            # print("\tafter norm grad: ", torch.isnan(grad).any(), torch.isinf(grad).any(), torch.max(grad), torch.min(grad))
+            return grad
+        def hook_discr(grad):
+            # clip_grad_norm_ is in place so can't create a lambda function
+            clip_grad_norm_(grad, c.discriminator.gradient_maxNorm)
             return grad
         if c.discriminator.gradient_maxNorm is not None:
             for p in self.discriminator.parameters():
-                p.register_hook(hook_clip_grad_norm_)
+                p.register_hook(hook_discr)
         if c.generator.gradient_maxNorm is not None: 
             for p in self.generator.parameters():
-                p.register_hook(hook_clip_grad_norm_)
+                p.register_hook(hook_gener)
 
         super().__init__()
 
@@ -380,11 +382,15 @@ class MouseGAN(GAN):
             else:
                 raise e
 
-    def calcFinalTrajLocations(self, g_feats, normButtonLocs):
+    def calcFinalTrajLocations(self, g_feats, normButtonLocs, fake_lengths):
         """
         all return values are in unnormalized form
         """
         rawTrajectories = g_feats * self.std_traj + self.mean_traj
+        fake_lengths = torch.round(fake_lengths.float()).long()
+        fake_lengths = torch.clamp(fake_lengths, min=1) 
+        mask = torch.arange(rawTrajectories.shape[1], device=self.device).expand(rawTrajectories.shape[0], rawTrajectories.shape[1]) < fake_lengths.unsqueeze(1)
+        rawTrajectories = rawTrajectories * mask.unsqueeze(2)
         rawButtonTargets = normButtonLocs * self.std_button + self.mean_button
         targetWidths = rawButtonTargets[:, 0] 
         targetHeights = rawButtonTargets[:, 1]
@@ -460,7 +466,7 @@ class MouseGAN(GAN):
         return gradient_penalty
     
     def discriminatorLoss(self, d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
-                        mouse_trajectories, fake_traj, normButtonLocs, d_state, validation=False):
+                        mouse_trajectories, fake_traj, normButtonLocs, fake_lengths, d_state, validation=False):
         buttonTargets = normButtonLocs[:, 0:4]
         post = "_val" if validation else ""
         if self.c.lossFunc.type.value == LOSS_FUNC.WGAN_GP.value:
@@ -488,7 +494,7 @@ class MouseGAN(GAN):
         with torch.no_grad():
             # additional loss components
             if self.c.discriminator.useEndDeviationLoss:
-                g_finalLocations, realFinalLocations, _, _ = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
+                g_finalLocations, realFinalLocations, _, _ = self.calcFinalTrajLocations(fake_traj, normButtonLocs, fake_lengths)
                 d_loss_real_dev = self.endDeviationLoss(d_real_predictedEnd * self.std_traj + self.mean_traj, realFinalLocations)
                 d_loss_fake_dev = self.endDeviationLoss(d_fake_predictedEnd * self.std_traj + self.mean_traj, g_finalLocations)
                 d_loss_dev = (d_loss_real_dev + d_loss_fake_dev) / 2
@@ -527,7 +533,7 @@ class MouseGAN(GAN):
                 g_loss += g_length_loss * self.c.generator.lengthLossWeight
             # additional loss components
             if self.c.generator.useOutsideTargetLoss:
-                g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs)
+                g_finalLocations, _, targetWidths, targetHeights = self.calcFinalTrajLocations(fake_traj, normButtonLocs, fake_lengths)
                 g_loss_missed = self.outsideTargetLoss(g_finalLocations, targetWidths, targetHeights)
                 self.batchMetrics["g_loss_missed" + post] = g_loss_missed.item()
                 g_loss += g_loss_missed * self.c.generator.outsideTargetLossWeight
@@ -543,44 +549,6 @@ class MouseGAN(GAN):
         normButtons = normButtonLocs[:, :4]
         return mouse_trajectories, normButtons, normButtonLocs, real_lengths
 
-    
-    # def run_batch(self, batchData, is_training):
-    #     mouse_trajectories, normButtons, normButtonLocs, real_stop_tokens, real_lengths = self.prepare_batch(batchData)
-    #     _batch_size = mouse_trajectories.shape[0]
-    #     g_states = self.generator.init_hidden(_batch_size)
-    #     d_states = self.discriminator.init_hidden(_batch_size)
-
-    #     z = self.generator.generate_noise(_batch_size)
-    #     with autocast(): # using mixed precision calculations if CUDA enabled, SPEED-UP
-    #         fake_traj, fake_stop_tokens, _ = self.generator(z, normButtons, g_states)
-
-    #         d_real_out, d_real_predictedEnd = self.discriminator(mouse_trajectories, normButtons, real_stop_tokens, d_states)
-    #         d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_stop_tokens, d_states)
-
-    #         d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
-    #                                             mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
-    #     if is_training:
-    #         self.optimizer_D.zero_grad()  # clear previous gradients
-    #         self.gradientScaler.scale(d_loss).backward() # compute gradients of all variables wrt loss
-    #         self.gradientScaler.step(self.optimizer_D) # scaler performs the updates using the optimizer's assigned params
-
-    #     g_states = self.generator.init_hidden(_batch_size)
-    #     d_states = self.discriminator.init_hidden(_batch_size)
-    #     with autocast():
-    #         g_loss = self.generatorLoss(z, normButtonLocs, real_stop_tokens, real_lengths, g_states, d_states)
-
-    #     if is_training:
-    #         self.optimizer_G.zero_grad()
-    #         self.gradientScaler.scale(g_loss).backward()
-    #         self.gradientScaler.step(self.optimizer_G)
-
-    #         self.gradientScaler.update()
-
-    #     if is_training:
-    #         return d_loss, d_loss_base, g_loss
-    #     else:
-    #         return d_loss, g_loss, d_real_out, d_fake_out
-
     def run_batch(self, i_batch, batchData, is_training, freeze_d=False, freeze_g=False):
         mouse_trajectories, normButtons, normButtonLocs, real_lengths = self.prepare_batch(batchData)
         _batch_size = mouse_trajectories.shape[0]
@@ -594,7 +562,7 @@ class MouseGAN(GAN):
         d_fake_out, d_fake_predictedEnd = self.discriminator(fake_traj,          normButtons, fake_lengths, d_states, real=False)
 
         d_loss, d_loss_base = self.discriminatorLoss(d_real_out, d_real_predictedEnd, d_fake_out, d_fake_predictedEnd,
-                                                mouse_trajectories, fake_traj, normButtonLocs, d_states, validation=not is_training)
+                                                mouse_trajectories, fake_traj, normButtonLocs, fake_lengths, d_states, validation=not is_training)
         if is_training and not freeze_d:
             self.optimizer_D.zero_grad()  # clear previous gradients
             d_loss.backward() # retain_graph=True compute gradients of all variables wrt loss
@@ -721,6 +689,9 @@ class MouseGAN(GAN):
                                 # colorbar=dict(title="Velocity")),
                                 # turn off colorbar
                     )))
+            # a big red dot to starting location
+            fig.add_trace(go.Scatter(x=[df_abs['x'].iloc[0]], y=[df_abs['y'].iloc[0]], mode='markers', showlegend=False, marker=dict(size=8, symbol='star',
+                                                                                                                                      color='red')))
             x0, y0 = -width/2, -height/2
             x_i, y_i = width/2, height/2
             max_x = np.max([max_x, df_abs['x'].max(), x_i])
