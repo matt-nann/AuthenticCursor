@@ -105,12 +105,14 @@ class C_Generator:
     hidden_units: int = 128
     num_lstm_layers: int = 4
     lr: float = 0.0001
-    useOutsideTargetLoss: bool = False
     drop_prob: float = 0.1
     layer_normalization: bool = True
     residual_connections: bool = True
     gradient_maxNorm : Optional[float] = None
     useLengthLoss: bool = False
+    lengthLossWeight: float = 0.25
+    useOutsideTargetLoss: bool = False
+    outsideTargetLossWeight : float = 0.25
 
 @dataclass
 class Config:

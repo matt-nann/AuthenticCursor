@@ -44,6 +44,10 @@ class GeneratorBase(nn.Module, metaclass=abc.ABCMeta):
         self.eps = eps
         self.latent_dim = latent_dim
     
+    def init_weights(self):
+        for m in self.modules():
+            init_weights(m)
+
     def optim_parameters(self):
         return {'lr': self.lr, 'betas': (self.beta1, self.beta2), 'eps': self.eps}
 
@@ -71,7 +75,7 @@ class DiscriminatorBase(nn.Module, metaclass=abc.ABCMeta):
     
     def optim_parameters(self):
         return {'lr': self.lr, 'betas': (self.beta1, self.beta2), 'eps': self.eps}
-
+    
     @abc.abstractmethod
     def forward(self, x):
         pass
@@ -79,14 +83,12 @@ class DiscriminatorBase(nn.Module, metaclass=abc.ABCMeta):
 class GAN(metaclass=abc.ABCMeta):
     """Abstract GAN class."""
 
-    def __init__(self, generator, discriminator, conditional_freezing=False):
+    def __init__(self, conditional_freezing=False):
         """
         Args:
             generator: Generator class
             discriminator: Discriminator class
         """
-        self.discriminator = discriminator
-        self.generator = generator
         self.loss = nn.BCELoss()
         self.optimizer_D = optim.Adam(self.discriminator.parameters(), **self.discriminator.optim_parameters())
         self.optimizer_G = optim.Adam(self.generator.parameters(), **self.generator.optim_parameters())
