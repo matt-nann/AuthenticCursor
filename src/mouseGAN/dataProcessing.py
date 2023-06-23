@@ -385,8 +385,8 @@ class MouseGAN_Data:
                 weights_length[i_statistic] = self.input_trajectories[-1].shape[0]
                 i_statistic += 1
         
-        self.mean_button = buttonValues.mean(axis=0)
-        self.std_button = buttonValues.std(axis=0)
+        self.mean_condition = buttonValues.mean(axis=0)
+        self.std_condition = buttonValues.std(axis=0)
         self.mean_traj = np.average(all_traj_mean_std[:,:,0], weights=weights_length, axis=0)
         self.std_traj = np.average(all_traj_mean_std[:,:,1], weights=weights_length, axis=0)
         self.mean_length = weights_length.mean()
@@ -502,12 +502,12 @@ class MouseGAN_Data:
         self.targetValues = np.array(self.targetValues)
         self.mean_traj = self.trajectoryValues.mean(axis=1)
         self.std_traj = self.trajectoryValues.std(axis=1)
-        self.mean_button = self.targetValues.mean(axis=1)
-        self.std_button = self.targetValues.std(axis=1)
+        self.mean_condition = self.targetValues.mean(axis=1)
+        self.std_condition = self.targetValues.std(axis=1)
         print("mean_traj: ", self.mean_traj)
         print("std_traj: ", self.std_traj)
-        print("mean_button: ", self.mean_button)
-        print("std_button: ", self.std_button)
+        print("mean_button: ", self.mean_condition)
+        print("std_button: ", self.std_condition)
 
     def normalize(self, input_trajectories, buttonTargets):
         norm_input_trajectories = []
@@ -517,7 +517,7 @@ class MouseGAN_Data:
             norm_input_trajectories.append(torch.tensor(norm_traj, dtype=torch.float32))
             if np.isnan(norm_input_trajectories[-1]).any():
                 raise ValueError('nan found in norm_input_trajectories')
-            norm_target = (buttonTargets[i] - self.mean_button) / self.std_button
+            norm_target = (buttonTargets[i] - self.mean_condition) / self.std_condition
             norm_buttonTargets.append(torch.tensor(norm_target, dtype=torch.float32))
         return norm_input_trajectories, norm_buttonTargets
     
@@ -527,7 +527,7 @@ class MouseGAN_Data:
         for i in range(len(norm_input_trajectories)):
             traj = norm_input_trajectories[i] * self.std_traj + self.mean_traj
             input_trajectories.append(traj)
-            target = norm_buttonTargets[i] * self.std_button + self.mean_button
+            target = norm_buttonTargets[i] * self.std_condition + self.mean_condition
             buttonTargets.append(target)
         return input_trajectories, buttonTargets
     
@@ -655,6 +655,9 @@ class MouseGAN_Data:
                 pickle.dump(self.fake_trajectories, f)
             with open(self.dataLocal + '/synthetic_buttonTargets.pkl', 'wb') as f:
                 pickle.dump(self.fake_buttonTargets, f)
+
+    def saveFakeDataProperties(self, fakeDatasetProperties):
+        self.fakeDatasetProperties = fakeDatasetProperties
 
     def plotFakeSamples(self):
         # create a sample of indexes 

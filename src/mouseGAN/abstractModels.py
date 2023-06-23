@@ -36,7 +36,7 @@ def find_epoch_model(model_type, epoch, path):
 class GeneratorBase(nn.Module, metaclass=abc.ABCMeta):
     """Abstract Generator class for the GAN."""
 
-    def __init__(self, latent_dim=100, lr=0.0002, beta1=0.5, beta2=0.999, eps=1e-8):
+    def __init__(self, latent_dim=50, lr=0.0002, beta1=0.9, beta2=0.999, eps=1e-8):
         super().__init__()
         self.lr = lr
         self.beta1 = beta1
@@ -62,7 +62,7 @@ class GeneratorBase(nn.Module, metaclass=abc.ABCMeta):
 class DiscriminatorBase(nn.Module, metaclass=abc.ABCMeta):
     """Abstract Discriminator class for the GAN."""
 
-    def __init__(self, lr=0.0002, beta1=0.5, beta2=0.999, eps=1e-8):
+    def __init__(self, lr=0.0002, beta1=0.9, beta2=0.999, eps=1e-8):
         super().__init__()
         self.lr = lr
         self.beta1 = beta1

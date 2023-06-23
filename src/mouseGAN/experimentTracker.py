@@ -4,7 +4,7 @@ import dataclasses
 
 PROJECT_NAME = "mouseGAN"
 
-def initialize_wandb(config):
+def initialize_wandb(config, tempProjectName=None):
     """
     need to convert config to dict to pass to wandb.init
     """
@@ -15,4 +15,4 @@ def initialize_wandb(config):
             preppedConfig[k] = dataclasses.asdict(v)
         else:
             preppedConfig[k] = v
-    return wandb.init(project=PROJECT_NAME, job_type="train", config=config)
+    return wandb.init(project=PROJECT_NAME if tempProjectName is None else tempProjectName, job_type="train", config=config)

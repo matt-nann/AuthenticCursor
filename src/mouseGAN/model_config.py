@@ -100,6 +100,7 @@ class C_Discriminator:
     miniBatchDisc: Optional[C_MiniBatchDisc] = C_MiniBatchDisc()
     useEndDeviationLoss: bool = False
     gradient_maxNorm : Optional[float] = None
+    spectral_norm: bool = False
     
 @dataclass
 class C_Generator:
