@@ -34,6 +34,10 @@ class LOSS_FUNC(Enum):
     WGAN_GP = 'wgan_gp_loss_function'
     LSGAN = 'lsgan_loss_function'
 
+class GAN_DATASET(Enum):
+    MOUSE = 'mouse'
+    SINE_WAVE = 'sine'
+
 @dataclass
 class C_LossGap_Sch:
     cooldown: int

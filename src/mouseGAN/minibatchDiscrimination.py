@@ -8,7 +8,7 @@ class MinibatchDiscrimination(nn.Module):
     Prevents generator creating similar results (mode collapse) by allowing discriminator to receive batch statistics
     """
     def __init__(self, config : C_MiniBatchDisc, input_features):
-        super(MinibatchDiscrimination, self).__init__()
+        super().__init__()
         if (config.num_kernels is None) or (config.kernel_dim is None):
             raise ValueError("num_kernels and kernel_dim must be specified if using minibatch discrimination")
         self.input_features = input_features

@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_, clip_grad_value_
 
-from .model_config import LOSS_FUNC, LR_SCHEDULERS, Config
+from .model_config import LOSS_FUNC, LR_SCHEDULERS, Config, GAN_DATASET
 from .dataProcessing import MouseGAN_Data
 from .abstractModels import GeneratorBase, DiscriminatorBase, GAN
 from .minibatchDiscrimination import MinibatchDiscrimination
@@ -80,8 +80,8 @@ class Generator(GeneratorBase):
         self.device = device
         self.MAX_SEQ_LEN = config.MAX_SEQ_LEN
         self.hidden_units = c_g.hidden_units
-        self.mean_length = mean_length
-        self.std_length = std_length
+        self.mean_length = torch.tensor(mean_length, device=self.device, dtype=torch.float32)
+        self.std_length = torch.tensor(std_length, device=self.device, dtype=torch.float32)
         numInput = self.config.latent_dim + config.num_feats + config.num_target_feats
         self.fc_input_g = nn.Linear(in_features=numInput, out_features=c_g.hidden_units)
         self.fc_sequenceLength = nn.Linear(in_features=c_g.hidden_units, out_features=1) # predicting the stop token
@@ -128,11 +128,8 @@ class Generator(GeneratorBase):
         concat_in = torch.cat((z, prev_gen, buttonTarget), dim=-1)
         normSequenceLengths = self.fc_sequenceLength(self.leaky_relu(self.fc_input_g(concat_in)))
         sequenceLengths = self.std_length * normSequenceLengths + self.mean_length
-        MAX_SEQ_LEN = np.clip(round(sequenceLengths.max().item()), min=1, max=self.MAX_SEQ_LEN)
-        # print( "MAX_SEQ_LEN: ", MAX_SEQ_LEN, "raw sequenceLengths: ", sequenceLengths.squeeze())
+        MAX_SEQ_LEN = np.clip(round(sequenceLengths.max().item()), 1, self.MAX_SEQ_LEN)
         gen_feats = torch.zeros([batch_size, MAX_SEQ_LEN, self.config.num_feats], device=self.device)
-        # print("Generator")
-        # print("\tMAX_SEQ_LEN", MAX_SEQ_LEN)
         for i in range(MAX_SEQ_LEN):
             # concatenate current input features and previous timestep output features, and buttonTarget every sequence step
             concat_in = torch.cat((z, prev_gen, buttonTarget), dim=-1)
@@ -258,7 +255,7 @@ class MouseGAN(GAN):
     while the generator minimizes the critic's evaluations of its generated samples, leading to a negative loss.
     """
     def __init__(self, dataset: MouseGAN_Data, trainLoader: DataLoader, testLoader: DataLoader,
-                device, c : Config,IN_COLAB=False, verbose=False,printBatch=False, dataType=) -> GAN:
+                device, c : Config,IN_COLAB=False, verbose=False,printBatch=False, dataType=GAN_DATASET.MOUSE):
         self.c = c
         self.device = device
         self.verbose = verbose
@@ -280,7 +277,8 @@ class MouseGAN(GAN):
             self.locationMSELoss = c.locationMSELoss
             self.criterion_locaDev = nn.MSELoss() if c.locationMSELoss else nn.L1Loss()
 
-        self.visualTrainingVerfication = 
+        self.MOUSE_DATA = dataType.value == GAN_DATASET.MOUSE.value
+        self.visualTrainingVerfication = self.plotGeneratedMouseTrajectories if self.MOUSE_DATA else self.plotGeneratedSineCurves
 
         self.criterionMSE = nn.MSELoss()
         self.criterionMAE = nn.L1Loss()
@@ -634,7 +632,7 @@ class MouseGAN(GAN):
                 self.scheduler_G.step(g_loss.item())
                 self.batchMetrics["G_lr"] = self.optimizer_G.param_groups[0]['lr']
             # print("D_lr:", self.optimizer_D.param_groups[0]['lr'], "G_lr:", self.optimizer_G.param_groups[0]['lr'])
-            if self.printBatch and i % int(self.trainBatches * self.batch_print_percentage) == 0:
+            if self.printBatch and (self.batch_print_percentage is None or i % int(self.trainBatches * self.batch_print_percentage) == 0):
                 print("\tBatch %d/%d, d_loss = %.3f, g_loss = %.3f" % (i + 1, self.trainBatches, d_loss.item(),  g_loss.item()), end="\n")
             try:
                 if i != self.trainBatches - 1:
@@ -655,7 +653,8 @@ class MouseGAN(GAN):
         returns unnormalized trajectories
         """      
         normButtons = (rawButtonLocs - self.mean_condition) / self.std_condition
-        normButtons = normButtons[:,:4].type(torch.FloatTensor).to(self.device)
+        if self.MOUSE_DATA:
+            normButtons = normButtons[:,:4].type(torch.FloatTensor).to(self.device)
         samples = rawButtonLocs.shape[0]
         self.generator.eval()
         with torch.no_grad():
@@ -755,10 +754,22 @@ class MouseGAN(GAN):
         except Exception as e:
             ...
 
-    def plotGeneratedSineCurves(self, samples=50, epoch=None, batch=None, batches=None):
+    def plotGeneratedSineCurves(self, samples=5, epoch=None, batch=None, batches=None):
         fig = go.Figure()
-        rawButtonTargets = self.dataset.createButtonTargets(samples, **self.fakeDataProperties, seed=1)
-        ...
+        conditions = self.dataset.generate_conditions(samples, **self.fakeDataProperties)
+        _rawConditions = torch.tensor(conditions, dtype=torch.float32).to(self.device)
+        generated_trajs, fake_lengths = self.generate(_rawConditions)
+        _rawConditions = _rawConditions.detach().cpu().numpy()
+        generated_trajs = generated_trajs.detach().cpu().numpy()
+        fake_lengths = fake_lengths.detach().cpu().numpy()
+
+        fig = go.Figure()
+        for i in range(samples):
+            generated_traj = generated_trajs[i][:round(fake_lengths[i])].squeeze()
+            condition = conditions[i]
+            fig.add_trace(go.Scatter(y=generated_traj, mode='lines', showlegend=False, marker=dict(size=5)))
+        fig.show()
+
 
     def discriminatorLearningRates(self):
         df = pd.DataFrame(self.scheduler_D.scale_history, columns=['scale'])
